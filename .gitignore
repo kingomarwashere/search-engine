@@ -4,6 +4,7 @@ node_modules/
 # Crawler data
 crawler/domains.csv
 crawler/*.csv
+crawler/frontier.db*
 
 # Wrangler / Cloudflare
 .wrangler/

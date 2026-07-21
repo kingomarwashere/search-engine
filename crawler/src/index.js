@@ -1,66 +1,116 @@
 import pLimit from 'p-limit'
 import { downloadTranco, readDomains } from './tranco.js'
 import { fetchPage } from './fetcher.js'
-import { parsePage } from './parser.js'
-import { setupIndex, indexDoc, flush } from './indexer.js'
+import { parsePage, regDomain } from './parser.js'
+import { setupIndex, clearIndex, indexDoc, flush } from './indexer.js'
+import { allowed } from './robots.js'
+import { sitemapUrls } from './sitemap.js'
+import * as F from './frontier.js'
 
-const CONCURRENCY = parseInt(process.env.CONCURRENCY || '8')
-const LIMIT = parseInt(process.env.LIMIT || '100000')
+const CONCURRENCY = parseInt(process.env.CONCURRENCY || '16')
+const LIMIT = parseInt(process.env.LIMIT || '200000')                    // max pages to index this run
+const SEED_DOMAINS = parseInt(process.env.SEED_DOMAINS || '20000')       // top Majestic domains to seed
+const MAX_DEPTH = parseInt(process.env.MAX_DEPTH || '2')                 // link-follow depth
+const MAX_PAGES_PER_DOMAIN = parseInt(process.env.MAX_PAGES_PER_DOMAIN || '30')
+const HOST_DELAY_MS = parseInt(process.env.HOST_DELAY_MS || '1000')      // politeness per host
+const FRESH = process.env.FRESH === '1'
 
-let crawled = 0
-let failed = 0
-let skipped = 0
+const sleep = ms => new Promise(r => setTimeout(r, ms))
+const lastHit = new Map()      // host -> last fetch ts (politeness)
+let indexed = 0, active = 0, crawled = 0, failed = 0
 
-function log() {
-  if (crawled % 50 === 0) {
-    process.stdout.write(`\r[crawled=${crawled} failed=${failed} skipped=${skipped}]`)
+function stats() {
+  process.stdout.write(`\r[indexed=${indexed} crawled=${crawled} failed=${failed} queued=${F.queued()} active=${active}]   `)
+}
+
+function seed() {
+  let n = 0
+  for (const { rank, domain } of readDomains(SEED_DOMAINS)) {
+    F.enqueue(`https://${domain}`, regDomain(domain), 0, rank)
+    n++
+  }
+  console.log(`Seeded ${n} domains`)
+}
+
+async function politeWait(host) {
+  const wait = (lastHit.get(host) || 0) + HOST_DELAY_MS - Date.now()
+  if (wait > 0) await sleep(wait)
+  lastHit.set(host, Date.now())
+}
+
+async function crawlOne(row) {
+  const host = new URL(row.url).host
+  await politeWait(host)
+
+  if (!(await allowed(row.url))) { F.markDone(row.url); return }
+
+  const result = await fetchPage(row.url)
+  if (!result) { failed++; F.markFail(row.url); return }
+  crawled++
+
+  const doc = parsePage(result.url, result.html)
+  const links = doc.links
+
+  if ((doc.title || doc.description) && F.domainPages(doc.domain) < MAX_PAGES_PER_DOMAIN) {
+    doc.rank = row.rank
+    doc.indeg = F.indegOf(doc.domain)
+    await indexDoc(doc)
+    indexed++
+    F.incDomainPages(doc.domain)
+  }
+  F.markDone(row.url)
+
+  // depth-0: also seed from the sitemap
+  if (row.depth === 0) {
+    for (const u of await sitemapUrls(new URL(result.url).origin)) {
+      try { F.enqueue(u, regDomain(new URL(u).hostname), 1, row.rank) } catch { /* skip */ }
+    }
+  }
+
+  // enqueue links / record authority
+  if (row.depth < MAX_DEPTH) {
+    for (const l of links) {
+      if (l.sameDomain) {
+        if (F.domainPages(l.domain) < MAX_PAGES_PER_DOMAIN) F.enqueue(l.url, l.domain, row.depth + 1, row.rank)
+      } else {
+        F.incIndeg(l.domain) // inbound cross-domain link = authority signal
+      }
+    }
   }
 }
 
-async function crawlDomain({ rank, domain }) {
-  const result = await fetchPage(domain)
-  if (!result) { failed++; log(); return }
-
-  const doc = parsePage(result.url, result.html)
-  if (!doc.title && !doc.description) { skipped++; log(); return }
-
-  doc.rank = rank
-  await indexDoc(doc)
-  crawled++
-  log()
-}
-
-// Process domains in a bounded sliding window instead of creating all promises upfront
 async function main() {
   await downloadTranco()
   await setupIndex()
+  if (FRESH) await clearIndex()
 
-  console.log(`Starting crawl: concurrency=${CONCURRENCY} limit=${LIMIT}`)
+  F.resetInProgress()
+  if (F.queued() === 0 && F.finished() === 0) seed()
 
-  const queue = []
-  let active = 0
+  console.log(`Crawl: concurrency=${CONCURRENCY} limit=${LIMIT} depth=${MAX_DEPTH} pages/domain=${MAX_PAGES_PER_DOMAIN}`)
+  const limit = pLimit(CONCURRENCY)
+  const statTimer = setInterval(stats, 1000)
 
-  async function runNext(entry) {
-    active++
-    try { await crawlDomain(entry) } catch {}
-    active--
+  while (indexed < LIMIT) {
+    const rows = F.claimBatch(CONCURRENCY * 2)
+    if (rows.length === 0) {
+      if (active === 0) break
+      await sleep(200)
+      continue
+    }
+    for (const row of rows) {
+      active++
+      limit(() => crawlOne(row).catch(() => F.markFail(row.url)).finally(() => { active-- }))
+    }
+    // don't outrun the worker pool
+    while (active >= CONCURRENCY * 2) await sleep(20)
   }
 
-  for (const entry of readDomains(LIMIT)) {
-    while (active >= CONCURRENCY) {
-      await new Promise(r => setTimeout(r, 10))
-    }
-    queue.push(runNext(entry))
-    // Periodically drain settled promises to free memory
-    if (queue.length >= 500) {
-      await Promise.allSettled(queue.splice(0, 200))
-    }
-  }
-
-  await Promise.allSettled(queue)
+  while (active > 0) await sleep(200)
   await flush()
-
-  console.log(`\nDone. crawled=${crawled} failed=${failed} skipped=${skipped}`)
+  clearInterval(statTimer)
+  stats()
+  console.log(`\nDone. indexed=${indexed} crawled=${crawled} failed=${failed}`)
 }
 
-main().catch(console.error)
+main().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1) })
