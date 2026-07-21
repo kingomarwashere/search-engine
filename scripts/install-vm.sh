@@ -65,10 +65,29 @@ cp -r /tmp/search-crawler/. /opt/search-crawler/
 cd /opt/search-crawler
 npm install
 
+echo "=== Installing cloudflared tunnel (exposes API over HTTPS/443) ==="
+# A deployed Cloudflare Worker's fetch() can't reach :3000, so the API is
+# published at https://search-api.theradicalparty.com via a Cloudflare Tunnel.
+# Provide CLOUDFLARED_TOKEN (connector token from the Zero Trust dashboard);
+# route the public hostname search-api.theradicalparty.com -> http://localhost:3000 there.
+if [ -n "$CLOUDFLARED_TOKEN" ]; then
+  if ! command -v cloudflared >/dev/null 2>&1; then
+    curl -L --output /tmp/cloudflared.deb \
+      https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+    dpkg -i /tmp/cloudflared.deb
+  fi
+  cloudflared service install "$CLOUDFLARED_TOKEN"
+  systemctl enable cloudflared
+  systemctl restart cloudflared
+  echo "cloudflared installed and running"
+else
+  echo "CLOUDFLARED_TOKEN not set — skipping tunnel install (see docs/DEPLOY.md)"
+fi
+
 echo ""
 echo "Done! Services running:"
 echo "  Meilisearch: http://localhost:7700"
-echo "  Search API:  http://localhost:3000"
+echo "  Search API:  http://localhost:3000 (published via tunnel at https://search-api.theradicalparty.com)"
 echo ""
 echo "To start crawling:"
 echo "  cd /opt/search-crawler && LIMIT=50000 CONCURRENCY=8 npm start"

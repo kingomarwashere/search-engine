@@ -7,6 +7,8 @@
     { "pattern": "search.theradicalparty.com/*", "zone_name": "theradicalparty.com" }
   ],
   "vars": {
-    "API_URL": "http://search-api.theradicalparty.com:3000"
+    // API is fronted by a Cloudflare Tunnel on HTTPS/443 — a deployed Worker's
+    // fetch() cannot reliably reach non-standard ports (e.g. :3000). See docs/DEPLOY.md.
+    "API_URL": "https://search-api.theradicalparty.com"
   }
 }

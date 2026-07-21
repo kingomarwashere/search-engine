@@ -21,7 +21,7 @@ scp_cmd ../crawler/. "$VM_USER@$VM_HOST:/tmp/search-crawler/"
 scp_cmd install-vm.sh "$VM_USER@$VM_HOST:/tmp/install-vm.sh"
 
 echo "=== Running install script ==="
-ssh_cmd "bash /tmp/install-vm.sh"
+ssh_cmd "CLOUDFLARED_TOKEN='${CLOUDFLARED_TOKEN:-}' bash /tmp/install-vm.sh"
 
 echo "=== Done ==="
 ssh_cmd "systemctl status meilisearch --no-pager && systemctl status search-api --no-pager"
