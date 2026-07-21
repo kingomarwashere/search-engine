@@ -1,6 +1,6 @@
 import { fetch } from 'undici'
 
-const TIMEOUT_MS = 8000
+const TIMEOUT_MS = parseInt(process.env.FETCH_TIMEOUT_MS || '6000')
 const MAX_BODY_BYTES = 500_000
 
 const HEADERS = {

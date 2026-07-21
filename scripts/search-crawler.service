@@ -1,0 +1,33 @@
+[Unit]
+Description=RADICAL_SEARCH crawler
+After=network.target meilisearch.service
+Requires=meilisearch.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/search-crawler
+ExecStart=/usr/bin/node --experimental-sqlite src/index.js
+# Batch job: exits 0 when the crawl finishes; only restart on crash.
+Restart=on-failure
+RestartSec=15
+
+# Guardrails so a runaway crawl can't starve other services on a shared box.
+CPUQuota=150%
+MemoryMax=1200M
+MemoryHigh=1000M
+
+Environment=LIMIT=150000
+Environment=SEED_DOMAINS=15000
+Environment=CONCURRENCY=20
+Environment=MAX_DEPTH=2
+Environment=MAX_PAGES_PER_DOMAIN=25
+Environment=HOST_DELAY_MS=600
+Environment=FETCH_TIMEOUT_MS=5000
+Environment=BODY_CHARS=2500
+Environment=FRONTIER_DB=/opt/search-crawler/frontier.db
+Environment=MEILI_URL=http://localhost:7700
+Environment=MEILI_KEY=masterKey
+
+[Install]
+WantedBy=multi-user.target

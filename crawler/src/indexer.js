@@ -6,10 +6,12 @@ const BATCH_SIZE = 200
 let buffer = []
 
 async function meili(method, path, body) {
+  // Always time-bound: an untimed hang here would freeze every crawl worker.
   const res = await fetch(`${MEILI_URL}${path}`, {
     method,
     headers: { 'Authorization': `Bearer ${MEILI_KEY}`, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(20000),
   })
   return res.json()
 }
@@ -48,7 +50,12 @@ export async function indexDoc(doc) {
 export async function flush() {
   if (buffer.length === 0) return
   const docs = buffer.splice(0)
-  await meili('POST', `/indexes/${INDEX}/documents`, docs)
+  try {
+    await meili('POST', `/indexes/${INDEX}/documents`, docs)
+  } catch (e) {
+    // Never let an indexing hiccup wedge the crawl; drop the batch and continue.
+    console.error(`\nflush failed (${docs.length} docs dropped): ${e.message}`)
+  }
 }
 
 export { meili, baseScore }
