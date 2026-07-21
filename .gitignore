@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Crawler data
+crawler/domains.csv
+crawler/*.csv
+
+# Wrangler / Cloudflare
+.wrangler/
+dist/
+
+# Local env / secrets (never commit VM passwords, keys)
+.env
+.env.local
+deploy.env
+*.local
+
+# Logs & OS
+*.log
+.DS_Store

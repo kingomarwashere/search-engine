@@ -1,0 +1,12 @@
+{
+  "name": "search-engine-frontend",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "routes": [
+    { "pattern": "search.theradicalparty.com/*", "zone_name": "theradicalparty.com" }
+  ],
+  "vars": {
+    "API_URL": "http://search-api.theradicalparty.com:3000"
+  }
+}

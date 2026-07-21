@@ -1,0 +1,14 @@
+{
+  "name": "search-engine-crawler",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "tranco": "node src/tranco.js"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "p-limit": "^6.2.0",
+    "undici": "^7.0.0"
+  }
+}
