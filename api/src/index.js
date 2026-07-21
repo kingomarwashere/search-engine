@@ -76,6 +76,56 @@ app.get('/search', async (c) => {
   })
 })
 
+// AI answer box — cited RAG over the index with Claude.
+const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY
+const ANSWER_MODEL = process.env.ANSWER_MODEL || 'claude-haiku-4-5'
+const answerCache = new Map() // q -> { at, payload }
+
+app.get('/answer', async (c) => {
+  const q = c.req.query('q')?.trim()
+  if (!q) return c.json({ error: 'missing q' }, 400)
+  if (!ANTHROPIC_KEY) return c.json({ error: 'answers disabled' }, 503)
+
+  const key = q.toLowerCase()
+  const cached = answerCache.get(key)
+  if (cached && Date.now() - cached.at < 3_600_000) return c.json(cached.payload)
+
+  const result = await meiliSearch(q, 0, 6)
+  const hits = result.hits ?? []
+  if (hits.length === 0) return c.json({ answer: null, sources: [], query: q })
+
+  const sources = hits.map((h, i) => ({
+    n: i + 1, title: h.title, url: h.url, domain: h.domain,
+    snippet: (h.description || '').slice(0, 300),
+  }))
+  const context = sources.map(s => `[${s.n}] ${s.title} — ${s.domain}\n${s.snippet}`).join('\n\n')
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: ANSWER_MODEL,
+        max_tokens: 400,
+        system: 'You are a search answer engine over the open web. Answer the query in 2-4 concise sentences using ONLY the numbered sources. Cite claims inline like [1][2]. If the sources do not contain the answer, say so briefly. Never invent facts or URLs.',
+        messages: [{ role: 'user', content: `Query: ${q}\n\nSources:\n${context}` }],
+      }),
+      signal: AbortSignal.timeout(20000),
+    })
+    const data = await res.json()
+    const answer = data.content?.map(b => b.text).join('') ?? null
+    const payload = { answer, sources, query: q, model: ANSWER_MODEL }
+    answerCache.set(key, { at: Date.now(), payload })
+    return c.json(payload)
+  } catch (e) {
+    return c.json({ answer: null, sources, query: q, error: e.message }, 502)
+  }
+})
+
 // P2P: register as peer
 app.post('/peers/register', async (c) => {
   const { id, url } = await c.req.json()

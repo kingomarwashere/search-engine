@@ -63,6 +63,16 @@ const CSS = `
   }
   .results-logo { font-size: 20px; font-weight: 700; white-space: nowrap; color: var(--title); }
   .results-logo span { color: var(--accent); }
+
+  /* AI answer card */
+  .answer-card { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent); padding: 15px 18px; margin: 0 0 24px; }
+  .answer-card.hidden { display: none; }
+  .answer-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--accent); margin-bottom: 9px; }
+  .answer-body { font-size: 14px; line-height: 1.65; color: var(--text); }
+  .answer-body sup a { color: var(--accent); font-size: 10px; padding: 0 1px; text-decoration: none; }
+  .answer-sources { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .answer-sources a { font-size: 11px; color: var(--muted); border: 1px solid var(--border); padding: 2px 7px; }
+  .answer-sources a:hover { border-color: var(--accent); color: var(--accent); }
   .results-form { display: flex; gap: 8px; flex: 1; }
   .results-input {
     flex: 1; background: var(--surface); border: 1px solid var(--border);
@@ -182,6 +192,36 @@ function resultsPage(q: string, data: any, page: number) {
         ~${total.toLocaleString()} results
         ${peers.length ? `<span class="peers">// ${peers.length} peer${peers.length !== 1 ? 's' : ''} federated</span>` : ''}
       </div>
+      <div class="answer-card hidden" id="answer">
+        <div class="answer-label">✦ AI answer</div>
+        <div class="answer-body" id="answer-body"></div>
+        <div class="answer-sources" id="answer-sources"></div>
+      </div>
+      <script>
+        (function () {
+          var q = ${JSON.stringify(q)};
+          var card = document.getElementById('answer'),
+              body = document.getElementById('answer-body'),
+              srcEl = document.getElementById('answer-sources');
+          function esc(t){ return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+          fetch('/api/answer?q=' + encodeURIComponent(q))
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+              if (!d || !d.answer) return;
+              var srcs = d.sources || [];
+              var html = esc(d.answer).replace(/\\[(\\d+)\\]/g, function (m, n) {
+                var s = srcs[parseInt(n) - 1];
+                return s ? '<sup><a href="' + esc(s.url) + '" rel="noopener" title="' + esc(s.domain) + '">[' + n + ']</a></sup>' : '';
+              });
+              body.innerHTML = html;
+              srcEl.innerHTML = srcs.map(function (s) {
+                return '<a href="' + esc(s.url) + '" rel="noopener">' + esc(s.domain) + '</a>';
+              }).join('');
+              card.classList.remove('hidden');
+            })
+            .catch(function () {});
+        })();
+      </script>
       ${results}
       ${hits.length ? `<div class="pagination">${prevLink}${nextLink}</div>` : ''}
       <div class="footer">
