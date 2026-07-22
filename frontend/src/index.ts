@@ -129,6 +129,9 @@ const THEME_JS = `
   });
 `
 
+const SITE = 'https://search.theradicalparty.com'
+const DESCRIPTION = 'RADICAL_SEARCH — an independent, self-hosted search engine for the open web. Unfiltered results, AI-powered answers, no tracking and no filter bubble.'
+
 // On-brand favicon: dark tile, white "R", accent-pink underscore (the logo mark).
 const FAVICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
   <rect width="32" height="32" rx="6" fill="#0a0a0a"/>
@@ -136,15 +139,59 @@ const FAVICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
   <rect x="9" y="24" width="14" height="3" rx="1" fill="#ff0099"/>
 </svg>`
 
-function layout(title: string, body: string) {
+// 1200x630 social share card (Open Graph / Twitter).
+const OG_IMAGE = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#0a0a0a"/>
+  <text x="600" y="300" font-family="'Roboto Mono',ui-monospace,monospace" font-size="92" font-weight="700" fill="#ffffff" text-anchor="middle">RADICAL<tspan fill="#ff0099">_</tspan>SEARCH</text>
+  <rect x="360" y="345" width="480" height="8" rx="4" fill="#ff0099"/>
+  <text x="600" y="410" font-family="'Roboto Mono',ui-monospace,monospace" font-size="30" letter-spacing="6" fill="#666" text-anchor="middle">THE OPEN WEB — UNFILTERED</text>
+</svg>`
+
+// WebSite + SearchAction structured data → eligible for a Google sitelinks
+// search box. Only emitted on the indexable homepage.
+const JSON_LD = `<script type="application/ld+json">${JSON.stringify({
+  '@context': 'https://schema.org',
+  '@type': 'WebSite',
+  name: 'RADICAL_SEARCH',
+  alternateName: 'Radical Search',
+  url: SITE + '/',
+  description: DESCRIPTION,
+  potentialAction: {
+    '@type': 'SearchAction',
+    target: { '@type': 'EntryPoint', urlTemplate: SITE + '/search?q={search_term_string}' },
+    'query-input': 'required name=search_term_string',
+  },
+})}</script>`
+
+interface SeoOpts { canonical?: string; description?: string; noindex?: boolean; jsonLd?: boolean }
+
+function layout(title: string, body: string, opts: SeoOpts = {}) {
+  const desc = opts.description ?? DESCRIPTION
+  const canonical = opts.canonical ?? SITE + '/'
+  const robots = opts.noindex ? 'noindex, follow' : 'index, follow'
   return `<!DOCTYPE html><html lang="en"><head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     <title>${title}</title>
+    <meta name="description" content="${esc(desc)}">
+    <meta name="robots" content="${robots}">
+    <link rel="canonical" href="${esc(canonical)}">
+    <meta name="theme-color" content="#0a0a0a">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="RADICAL_SEARCH">
+    <meta property="og:title" content="${esc(title)}">
+    <meta property="og:description" content="${esc(desc)}">
+    <meta property="og:url" content="${esc(canonical)}">
+    <meta property="og:image" content="${SITE}/og.svg">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="${esc(title)}">
+    <meta name="twitter:description" content="${esc(desc)}">
+    <meta name="twitter:image" content="${SITE}/og.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <style>${CSS}</style>
     <script>${THEME_JS}</script>
+    ${opts.jsonLd ? JSON_LD : ''}
   </head><body>
     <button class="theme-toggle" id="theme-toggle">🌙</button>
     ${body}
@@ -163,7 +210,7 @@ function homePage(q = '') {
         <button class="search-btn" type="submit">Search the web</button>
       </form>
     </div>
-  `)
+  `, { jsonLd: true, canonical: SITE + '/' })
 }
 
 function resultsPage(q: string, data: any, page: number) {
@@ -238,7 +285,7 @@ function resultsPage(q: string, data: any, page: number) {
         ${(data.nodeId ?? 'main')} node
       </div>
     </div>
-  `)
+  `, { noindex: true, canonical: `${SITE}/search?q=${encodeURIComponent(q)}`, description: `Search results for "${q}" on RADICAL_SEARCH — the independent open-web search engine.` })
 }
 
 function esc(s: string) {
@@ -255,6 +302,42 @@ export default {
           'Content-Type': 'image/svg+xml',
           'Cache-Control': 'public, max-age=86400',
         },
+      })
+    }
+
+    if (url.pathname === '/og.svg') {
+      return new Response(OG_IMAGE, {
+        headers: { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' },
+      })
+    }
+
+    if (url.pathname === '/robots.txt') {
+      // Allow the homepage; keep dynamic search-result and API URLs out of the
+      // crawl (Google discourages indexing internal search results, and this
+      // avoids wasting crawl budget on an unbounded query space).
+      const body = `User-agent: *
+Allow: /$
+Disallow: /search
+Disallow: /api/
+
+Sitemap: ${SITE}/sitemap.xml
+`
+      return new Response(body, { headers: { 'Content-Type': 'text/plain; charset=utf-8' } })
+    }
+
+    if (url.pathname === '/sitemap.xml') {
+      const body = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>${SITE}/</loc>
+    <lastmod>2026-07-22</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+  </url>
+</urlset>
+`
+      return new Response(body, {
+        headers: { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' },
       })
     }
 
