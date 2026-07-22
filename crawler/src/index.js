@@ -14,6 +14,18 @@ const MAX_DEPTH = parseInt(process.env.MAX_DEPTH || '2')                 // link
 const MAX_PAGES_PER_DOMAIN = parseInt(process.env.MAX_PAGES_PER_DOMAIN || '30')
 const HOST_DELAY_MS = parseInt(process.env.HOST_DELAY_MS || '1000')      // politeness per host
 const FRESH = process.env.FRESH === '1'
+// Distributed crawling: each worker owns a disjoint slice of the seed domains
+// (hash(domain) % SHARD_COUNT === SHARD_ID). Defaults = single-node (all domains).
+const SHARD_ID = parseInt(process.env.SHARD_ID || '0')
+const SHARD_COUNT = parseInt(process.env.SHARD_COUNT || '1')
+
+// FNV-1a — cheap, stable hash so every worker agrees on who owns a domain.
+function hashDomain(s) {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) }
+  return h >>> 0
+}
+const ownsDomain = domain => SHARD_COUNT <= 1 || hashDomain(domain) % SHARD_COUNT === SHARD_ID
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 const lastHit = new Map()      // host -> last fetch ts (politeness)
@@ -24,12 +36,13 @@ function stats() {
 }
 
 function seed() {
-  let n = 0
+  let n = 0, skipped = 0
   for (const { rank, domain } of readDomains(SEED_DOMAINS)) {
+    if (!ownsDomain(regDomain(domain))) { skipped++; continue }
     F.enqueue(`https://${domain}`, regDomain(domain), 0, rank)
     n++
   }
-  console.log(`Seeded ${n} domains`)
+  console.log(`Seeded ${n} domains (shard ${SHARD_ID}/${SHARD_COUNT}, skipped ${skipped} out-of-shard)`)
 }
 
 async function politeWait(host) {
