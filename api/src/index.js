@@ -6,28 +6,66 @@ const PORT = parseInt(process.env.PORT || '3000')
 const MEILI_URL = process.env.MEILI_URL || 'http://localhost:7700'
 const MEILI_KEY = process.env.MEILI_KEY || 'masterKey'
 const NODE_ID = process.env.NODE_ID || 'main'
+const EMBEDDER = process.env.EMBEDDER || 'workersai'
+const SEMANTIC_RATIO = parseFloat(process.env.SEMANTIC_RATIO ?? '0.5') // 0 = keyword only
 
 // In-memory peer registry  { id, url, lastSeen }
 const peers = new Map()
 
-async function meiliSearch(q, offset = 0, limit = 10) {
+const meiliHeaders = { 'Authorization': `Bearer ${MEILI_KEY}`, 'Content-Type': 'application/json' }
+
+async function meiliQuery(body) {
   const res = await fetch(`${MEILI_URL}/indexes/pages/search`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${MEILI_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      q,
-      limit,
-      offset,
-      attributesToHighlight: ['title', 'description'],
-      highlightPreTag: '<mark>',
-      highlightPostTag: '</mark>',
-      attributesToRetrieve: ['url', 'domain', 'title', 'description', 'crawledAt'],
-    }),
+    method: 'POST', headers: meiliHeaders, body: JSON.stringify(body),
   })
-  return res.json()
+  return { ok: res.ok, data: await res.json() }
+}
+
+// Hybrid (semantic + keyword) search, with a keyword-only fallback if the
+// embedder/provider hiccups so search never hard-fails.
+async function meiliSearch(q, offset = 0, limit = 10) {
+  const base = {
+    q, limit, offset,
+    attributesToHighlight: ['title', 'description'],
+    highlightPreTag: '<mark>',
+    highlightPostTag: '</mark>',
+    attributesToRetrieve: ['url', 'domain', 'title', 'description', 'crawledAt'],
+  }
+  if (SEMANTIC_RATIO > 0) {
+    const hybrid = await meiliQuery({ ...base, hybrid: { embedder: EMBEDDER, semanticRatio: SEMANTIC_RATIO } })
+    if (hybrid.ok && hybrid.data.hits !== undefined) return hybrid.data
+  }
+  return (await meiliQuery(base)).data
+}
+
+// Rerank top hits by true relevance with Claude (opt-in via ?rerank=1).
+async function rerankHits(q, hits) {
+  const key = process.env.ANTHROPIC_API_KEY
+  if (!key || hits.length < 2) return hits
+  const list = hits.map((h, i) => `[${i}] ${h.title} — ${h.domain}: ${(h.description || '').slice(0, 140)}`).join('\n')
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: process.env.ANSWER_MODEL || 'claude-haiku-4-5',
+        max_tokens: 120,
+        system: 'You rerank web search results. Given a query and numbered results, reply with ONLY a comma-separated list of result indices, ordered most- to least-relevant to the query intent. Omit clearly irrelevant/spam results. e.g. "3,0,5,1"',
+        messages: [{ role: 'user', content: `Query: ${q}\n\nResults:\n${list}` }],
+      }),
+      signal: AbortSignal.timeout(8000),
+    })
+    const data = await res.json()
+    const text = data.content?.map(b => b.text).join('') ?? ''
+    const order = (text.match(/\d+/g) ?? []).map(Number).filter(n => n < hits.length)
+    if (!order.length) return hits
+    const seen = new Set(), out = []
+    for (const i of order) if (!seen.has(i)) { seen.add(i); out.push(hits[i]) }
+    for (let i = 0; i < hits.length; i++) if (!seen.has(i)) out.push(hits[i]) // keep dropped at the tail
+    return out
+  } catch {
+    return hits
+  }
 }
 
 async function queryPeer(peer, q) {
@@ -48,11 +86,12 @@ app.get('/search', async (c) => {
   const q = c.req.query('q')?.trim()
   const page = Math.max(0, parseInt(c.req.query('page') ?? '0'))
   const local = c.req.query('local') === '1'
+  const rerank = c.req.query('rerank') === '1' && page === 0
 
   if (!q) return c.json({ error: 'missing q' }, 400)
 
   const offset = page * 10
-  const local$ = meiliSearch(q, offset)
+  const local$ = meiliSearch(q, offset, rerank ? 20 : 10) // over-fetch when reranking
   const peer$ = local ? [] : [...peers.values()].map(p => queryPeer(p, q))
 
   const [localResult, ...peerResults] = await Promise.all([local$, ...peer$])
@@ -64,7 +103,8 @@ app.get('/search', async (c) => {
     .filter(h => !seen.has(h.url))
     .slice(0, 5)
 
-  const hits = [...(localResult.hits ?? []), ...peerHits]
+  let hits = [...(localResult.hits ?? []), ...peerHits]
+  if (rerank) hits = (await rerankHits(q, hits)).slice(0, 10)
 
   return c.json({
     hits,
@@ -72,6 +112,7 @@ app.get('/search', async (c) => {
     page,
     query: q,
     nodeId: NODE_ID,
+    reranked: rerank,
     peers: [...peers.keys()],
   })
 })
