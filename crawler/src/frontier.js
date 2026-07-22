@@ -22,7 +22,9 @@ db.exec(`
 
 const q = {
   add:       db.prepare('INSERT OR IGNORE INTO frontier(url,domain,depth,rank) VALUES(?,?,?,?)'),
-  next:      db.prepare('SELECT url,domain,depth,rank FROM frontier WHERE status=0 LIMIT ?'),
+  // Randomize the claim so a batch spans many hosts — otherwise contiguous
+  // same-host internal links get serialized by per-host politeness (stall).
+  next:      db.prepare('SELECT url,domain,depth,rank FROM frontier WHERE status=0 ORDER BY RANDOM() LIMIT ?'),
   claim:     db.prepare('UPDATE frontier SET status=3 WHERE url=?'),
   done:      db.prepare('UPDATE frontier SET status=1 WHERE url=?'),
   fail:      db.prepare('UPDATE frontier SET status=2 WHERE url=?'),
