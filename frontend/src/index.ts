@@ -129,10 +129,18 @@ const THEME_JS = `
   });
 `
 
+// On-brand favicon: dark tile, white "R", accent-pink underscore (the logo mark).
+const FAVICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="6" fill="#0a0a0a"/>
+  <text x="16" y="21.5" font-family="'Roboto Mono',ui-monospace,monospace" font-size="20" font-weight="700" fill="#ffffff" text-anchor="middle">R</text>
+  <rect x="9" y="24" width="14" height="3" rx="1" fill="#ff0099"/>
+</svg>`
+
 function layout(title: string, body: string) {
   return `<!DOCTYPE html><html lang="en"><head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     <title>${title}</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <style>${CSS}</style>
@@ -240,6 +248,15 @@ function esc(s: string) {
 export default {
   async fetch(req: Request, env: { API_URL: string }) {
     const url = new URL(req.url)
+
+    if (url.pathname === '/favicon.svg' || url.pathname === '/favicon.ico') {
+      return new Response(FAVICON, {
+        headers: {
+          'Content-Type': 'image/svg+xml',
+          'Cache-Control': 'public, max-age=86400',
+        },
+      })
+    }
 
     if (url.pathname === '/') {
       // Accept a query on the root too (e.g. /?q=what) — redirect to the
