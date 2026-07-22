@@ -242,6 +242,14 @@ export default {
     const url = new URL(req.url)
 
     if (url.pathname === '/') {
+      // Accept a query on the root too (e.g. /?q=what) — redirect to the
+      // canonical results URL so the search actually runs.
+      const q = url.searchParams.get('q')?.trim()
+      if (q) {
+        const page = url.searchParams.get('page')
+        const dest = `/search?q=${encodeURIComponent(q)}${page ? `&page=${encodeURIComponent(page)}` : ''}`
+        return Response.redirect(url.origin + dest, 302)
+      }
       return new Response(homePage(), { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
     }
 
