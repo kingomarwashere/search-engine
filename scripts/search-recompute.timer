@@ -1,0 +1,12 @@
+[Unit]
+Description=Run RADICAL_SEARCH authority recompute periodically
+
+[Timer]
+# First run 20 min after boot, then every 3 hours. As the crawl matures the
+# link graph densifies and each recompute sharpens ranking.
+OnBootSec=20min
+OnUnitActiveSec=3h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

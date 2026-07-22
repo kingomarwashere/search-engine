@@ -18,6 +18,9 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_frontier_status ON frontier(status);
   CREATE TABLE IF NOT EXISTS domain_pages (domain TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0);
   CREATE TABLE IF NOT EXISTS indeg        (domain TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0);
+  -- Cross-domain link graph for PageRank. Deduped src->dst (unique pairs), so a
+  -- single authoritative edge isn't over-counted by many links between two sites.
+  CREATE TABLE IF NOT EXISTS edges (src TEXT NOT NULL, dst TEXT NOT NULL, PRIMARY KEY(src,dst)) WITHOUT ROWID;
 `)
 
 const q = {
@@ -35,6 +38,7 @@ const q = {
   incPages:  db.prepare('INSERT INTO domain_pages(domain,n) VALUES(?,1) ON CONFLICT(domain) DO UPDATE SET n=n+1'),
   incIndeg:  db.prepare('INSERT INTO indeg(domain,n) VALUES(?,1) ON CONFLICT(domain) DO UPDATE SET n=n+1'),
   indeg:     db.prepare('SELECT n FROM indeg WHERE domain=?'),
+  addEdge:   db.prepare('INSERT OR IGNORE INTO edges(src,dst) VALUES(?,?)'),
 }
 
 export function enqueue(url, domain, depth, rank = 999999999) { q.add.run(url, domain, depth, rank) }
@@ -47,6 +51,8 @@ export function domainPages(domain) { return q.pages.get(domain)?.n ?? 0 }
 export function incDomainPages(domain) { q.incPages.run(domain) }
 export function incIndeg(domain) { q.incIndeg.run(domain) }
 export function indegOf(domain) { return q.indeg.get(domain)?.n ?? 0 }
+// Record a cross-domain link src->dst for the PageRank graph (skip self-loops).
+export function addEdge(src, dst) { if (src && dst && src !== dst) q.addEdge.run(src, dst) }
 
 // Atomically claim up to n queued URLs (single-threaded JS => select+update is atomic).
 export function claimBatch(n) {

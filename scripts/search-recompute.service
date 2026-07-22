@@ -1,0 +1,21 @@
+[Unit]
+Description=RADICAL_SEARCH authority recompute (PageRank -> Meili scores)
+After=network.target meilisearch.service
+Requires=meilisearch.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/search-engine/crawler
+ExecStart=/usr/bin/node --experimental-sqlite src/recompute.js
+# Keep the recompute from contending with the live crawl for CPU.
+CPUQuota=120%
+MemoryMax=1500M
+
+Environment=FRONTIER_DB=/opt/search-engine/crawler/frontier.db
+Environment=MEILI_URL=http://127.0.0.1:7700
+# MEILI_KEY is injected via an override drop-in on the box (keeps the key out of git).
+Environment=DAMPING=0.85
+Environment=ITERS=40
+Environment=PR_WEIGHT=0.6
+Environment=INDEG_WEIGHT=0.4

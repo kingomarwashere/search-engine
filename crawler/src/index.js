@@ -73,7 +73,8 @@ async function crawlOne(row) {
       if (l.sameDomain) {
         if (F.domainPages(l.domain) < MAX_PAGES_PER_DOMAIN) F.enqueue(l.url, l.domain, row.depth + 1, row.rank)
       } else {
-        F.incIndeg(l.domain) // inbound cross-domain link = authority signal
+        F.incIndeg(l.domain)          // inbound cross-domain link = authority signal
+        F.addEdge(doc.domain, l.domain) // record edge for PageRank recompute
       }
     }
   }
