@@ -195,6 +195,7 @@ function layout(title: string, body: string, opts: SeoOpts = {}) {
   </head><body>
     <button class="theme-toggle" id="theme-toggle">🌙</button>
     ${body}
+    <script src="https://theradicalparty.com/footer.js" defer></script>
   </body></html>`
 }
 

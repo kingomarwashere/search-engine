@@ -12,6 +12,13 @@ const SEMANTIC_RATIO = parseFloat(process.env.SEMANTIC_RATIO ?? '0.5') // 0 = ke
 // In-memory peer registry  { id, url, lastSeen }
 const peers = new Map()
 
+// Circuit-breaker for federation: a peer that times out / errors is benched for
+// PEER_COOLDOWN_MS so unreachable nodes don't add latency to every search. Peer
+// queries also get a tight timeout — local results must never wait on a slow peer.
+const PEER_TIMEOUT_MS = parseInt(process.env.PEER_TIMEOUT_MS || '800')
+const PEER_COOLDOWN_MS = parseInt(process.env.PEER_COOLDOWN_MS || '60000')
+const peerBenchedUntil = new Map() // url -> ts until which the peer is skipped
+
 const meiliHeaders = { 'Authorization': `Bearer ${MEILI_KEY}`, 'Content-Type': 'application/json' }
 
 async function meiliQuery(body) {
@@ -71,12 +78,14 @@ async function rerankHits(q, hits) {
 async function queryPeer(peer, q) {
   try {
     const res = await fetch(`${peer.url}/search?q=${encodeURIComponent(q)}&local=1`, {
-      signal: AbortSignal.timeout(3000),
+      signal: AbortSignal.timeout(PEER_TIMEOUT_MS),
       headers: { 'X-Peer-Id': NODE_ID },
     })
     const data = await res.json()
+    peerBenchedUntil.delete(peer.url) // responded — clear any bench
     return data.hits ?? []
   } catch {
+    peerBenchedUntil.set(peer.url, Date.now() + PEER_COOLDOWN_MS) // bench the flaky/unreachable peer
     return []
   }
 }
@@ -92,7 +101,10 @@ app.get('/search', async (c) => {
 
   const offset = page * 10
   const local$ = meiliSearch(q, offset, rerank ? 20 : 10) // over-fetch when reranking
-  const peer$ = local ? [] : [...peers.values()].map(p => queryPeer(p, q))
+  // Skip benched peers entirely so an unreachable node costs nothing (not even a timeout).
+  const now = Date.now()
+  const livePeers = local ? [] : [...peers.values()].filter(p => (peerBenchedUntil.get(p.url) ?? 0) <= now)
+  const peer$ = livePeers.map(p => queryPeer(p, q))
 
   const [localResult, ...peerResults] = await Promise.all([local$, ...peer$])
 
@@ -114,6 +126,7 @@ app.get('/search', async (c) => {
     nodeId: NODE_ID,
     reranked: rerank,
     peers: [...peers.keys()],
+    peersQueried: livePeers.length,
   })
 })
 
