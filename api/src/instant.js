@@ -200,7 +200,7 @@ async function parseWeather(q) {
   if (!place || place.length > 60) return null
   // Geocode via Nominatim (Open-Meteo's geocoding host is unreachable from this
   // box's network; Nominatim + Open-Meteo forecast is the reachable combination).
-  const geo = await getJson(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(place)}&format=json&limit=1`, { timeout: 4000 })
+  const geo = await getJson(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(place)}&format=json&limit=1&accept-language=en`, { timeout: 4000 })
   const g = Array.isArray(geo) ? geo[0] : null
   if (!g?.lat || !g?.lon) return null
   const parts = (g.display_name || place).split(',').map(s => s.trim())
