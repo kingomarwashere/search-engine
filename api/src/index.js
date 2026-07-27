@@ -96,7 +96,7 @@ const searchCache = new Map() // key -> { at, payload }
 const SEARCH_TTL = 10 * 60 * 1000
 // Hard wall-clock budget for the AI enhancement. If exceeded we serve the raw
 // keyword hits already in hand — search must never hang on a slow model call.
-const SMART_BUDGET_MS = parseInt(process.env.SMART_BUDGET_MS || '4000')
+const SMART_BUDGET_MS = parseInt(process.env.SMART_BUDGET_MS || '9000')
 
 // Search endpoint — fans out to peers when not local. In smart mode (default
 // from the frontend) it AI-rewrites the query, unions those hits, and reranks.
