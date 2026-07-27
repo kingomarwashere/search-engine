@@ -107,6 +107,42 @@ const CSS = `
   .footer { margin-top: 60px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 11px; color: var(--footer-text); letter-spacing: 1px; }
   .footer a { color: var(--footer-link); }
   .footer a:hover { color: var(--accent); }
+
+  /* ── Smart panel: instant answers, knowledge panel, related ── */
+  .smart-panel { display: flex; flex-direction: column; gap: 16px; margin: 0 0 24px; }
+  .smart-panel:empty { display: none; }
+  .iwidget { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent); padding: 16px 18px; }
+  .iwidget-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; }
+  .iwidget-main { font-size: 28px; font-weight: 700; color: var(--title); line-height: 1.15; word-break: break-word; }
+  .iwidget-sub { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .clock-row { display: flex; flex-wrap: wrap; gap: 22px 32px; }
+  .clock-time { font-size: 26px; font-weight: 700; color: var(--title); font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .clock-place { font-size: 11px; color: var(--accent); text-transform: uppercase; letter-spacing: 1px; margin-top: 3px; }
+  .clock-date { font-size: 11px; color: var(--snippet); margin-top: 2px; }
+  .weather-row { display: flex; align-items: center; gap: 16px; }
+  .weather-emoji { font-size: 44px; line-height: 1; }
+  .weather-temp { font-size: 34px; font-weight: 700; color: var(--title); }
+  .weather-meta { font-size: 12px; color: var(--muted); line-height: 1.7; }
+  .dict-pos { color: var(--accent); font-style: italic; font-size: 12px; margin-right: 6px; }
+  .dict-def { font-size: 13px; color: var(--text); line-height: 1.6; margin: 3px 0 9px; }
+  .dict-phon { font-size: 12px; color: var(--muted); margin-left: 8px; }
+
+  /* Wikipedia knowledge panel */
+  .kp { background: var(--surface); border: 1px solid var(--border); padding: 16px 18px; display: flex; gap: 16px; align-items: flex-start; }
+  .kp-thumb { flex-shrink: 0; }
+  .kp-thumb img { width: 92px; height: 92px; object-fit: cover; border: 1px solid var(--border); display: block; }
+  .kp-body { min-width: 0; }
+  .kp-title { font-size: 16px; font-weight: 700; color: var(--title); }
+  .kp-desc { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.5px; margin: 2px 0 9px; }
+  .kp-extract { font-size: 13px; line-height: 1.65; color: var(--snippet); }
+  .kp-link { font-size: 11px; margin-top: 10px; display: inline-block; letter-spacing: 1px; text-transform: uppercase; }
+
+  /* Related searches */
+  .related { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .related-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); width: 100%; margin-bottom: 2px; }
+  .related a { font-size: 12px; color: var(--muted); border: 1px solid var(--border); padding: 5px 12px; border-radius: 999px; transition: border-color .15s, color .15s; }
+  .related a:hover { border-color: var(--accent); color: var(--accent); }
+  @media (max-width: 480px) { .kp-thumb img { width: 64px; height: 64px; } .iwidget-main { font-size: 22px; } }
 `
 
 const THEME_JS = `
@@ -248,6 +284,7 @@ function resultsPage(q: string, data: any, page: number) {
         ~${total.toLocaleString()} results
         ${peers.length ? `<span class="peers">// ${peers.length} peer${peers.length !== 1 ? 's' : ''} federated</span>` : ''}
       </div>
+      <div class="smart-panel" id="smart"></div>
       <div class="answer-card hidden" id="answer">
         <div class="answer-label">✦ AI answer</div>
         <div class="answer-body" id="answer-body"></div>
@@ -274,6 +311,76 @@ function resultsPage(q: string, data: any, page: number) {
                 return '<a href="' + esc(s.url) + '" rel="noopener">' + esc(s.domain) + '</a>';
               }).join('');
               card.classList.remove('hidden');
+            })
+            .catch(function () {});
+        })();
+      </script>
+      <script>
+        (function () {
+          var q = ${JSON.stringify(q)};
+          var el = document.getElementById('smart');
+          if (!el) return;
+          function esc(t){ return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+          function attr(t){ return esc(t).replace(/"/g,'&quot;'); }
+          function widget(label, inner){ return '<div class="iwidget"><div class="iwidget-label">' + esc(label) + '</div>' + inner + '</div>'; }
+          function dictWidget(dd){
+            var body = '<div class="iwidget-main" style="font-size:22px">' + esc(dd.word) + (dd.phonetic ? '<span class="dict-phon">' + esc(dd.phonetic) + '</span>' : '') + '</div>';
+            (dd.meanings||[]).forEach(function(m){ (m.definitions||[]).forEach(function(def){
+              body += '<div class="dict-def"><span class="dict-pos">' + esc(m.partOfSpeech) + '</span>' + esc(def) + '</div>';
+            }); });
+            return widget('Definition', body);
+          }
+          function weatherWidget(wx){
+            var meta = 'Feels ' + esc(wx.feelsLike) + wx.unit + ' &middot; Humidity ' + esc(wx.humidity) + '% &middot; Wind ' + esc(wx.wind) + ' km/h';
+            var inner = '<div class="weather-row"><div class="weather-emoji">' + esc(wx.emoji) + '</div><div><div class="weather-temp">' + esc(wx.temp) + wx.unit + '</div><div class="iwidget-sub">' + esc(wx.desc) + ' &middot; ' + esc(wx.place) + '</div></div></div><div class="weather-meta">' + meta + '</div>';
+            return widget('Weather', inner);
+          }
+          function timeWidget(t){
+            var row = '<div class="clock-row">';
+            (t.zones||[]).forEach(function(z, i){
+              row += '<div class="clock"><div class="clock-time" id="clk' + i + '">&mdash;</div><div class="clock-place">' + esc(z.label) + '</div><div class="clock-date" id="clkd' + i + '"></div></div>';
+            });
+            return row + '</div>';
+          }
+          function startClock(zones){
+            function tick(){
+              (zones||[]).forEach(function(z, i){
+                var te = document.getElementById('clk' + i), de = document.getElementById('clkd' + i);
+                if (!te) return;
+                try {
+                  te.textContent = new Intl.DateTimeFormat('en-GB', { timeZone: z.timeZone, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date());
+                  if (de) de.textContent = new Intl.DateTimeFormat('en-US', { timeZone: z.timeZone, weekday: 'short', month: 'short', day: 'numeric' }).format(new Date());
+                } catch (e) {}
+              });
+            }
+            tick(); setInterval(tick, 1000);
+          }
+          function kp(wk){
+            var thumb = wk.thumbnail ? '<div class="kp-thumb"><img src="' + attr(wk.thumbnail) + '" alt="" loading="lazy"></div>' : '';
+            return '<div class="kp">' + thumb + '<div class="kp-body"><div class="kp-title">' + esc(wk.title) + '</div>' +
+              (wk.description ? '<div class="kp-desc">' + esc(wk.description) + '</div>' : '') +
+              '<div class="kp-extract">' + esc(wk.extract) + '</div>' +
+              '<a class="kp-link" href="' + attr(wk.url) + '" rel="noopener" target="_blank">Wikipedia &rarr;</a></div></div>';
+          }
+          function relatedBlock(rel){
+            var chips = rel.map(function(r){ return '<a href="/search?q=' + encodeURIComponent(r) + '">' + esc(r) + '</a>'; }).join('');
+            return '<div class="related"><div class="related-label">Related searches</div>' + chips + '</div>';
+          }
+          fetch('/api/instant?q=' + encodeURIComponent(q))
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+              if (!d || !d.hasPanel) return;
+              var w = d.widgets || {}, html = '';
+              if (w.calc)     html += widget('Calculator', '<div class="iwidget-main">' + esc(w.calc.result) + '</div><div class="iwidget-sub">' + esc(w.calc.expression) + '</div>');
+              if (w.unit)     html += widget('Conversion', '<div class="iwidget-main">' + esc(w.unit.label) + '</div>');
+              if (w.currency) html += widget('Currency', '<div class="iwidget-main">' + esc(w.currency.label) + '</div><div class="iwidget-sub">Live market rate</div>');
+              if (w.dictionary) html += dictWidget(w.dictionary);
+              if (w.weather)  html += weatherWidget(w.weather);
+              if (w.time)     html += timeWidget(w.time);
+              if (d.wiki)     html += kp(d.wiki);
+              if (d.related && d.related.length) html += relatedBlock(d.related);
+              el.innerHTML = html;
+              if (w.time) startClock(w.time.zones);
             })
             .catch(function () {});
         })();
@@ -362,7 +469,7 @@ Sitemap: ${SITE}/sitemap.xml
 
       try {
         const apiRes = await fetch(
-          `${env.API_URL}/search?q=${encodeURIComponent(q)}&page=${page}`,
+          `${env.API_URL}/search?q=${encodeURIComponent(q)}&page=${page}&smart=1`,
           { headers: { 'User-Agent': 'SearchFrontend/1.0' } }
         )
         const data = await apiRes.json() as any

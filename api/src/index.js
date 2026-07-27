@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
+import { instant, rewriteQuery } from './instant.js'
 
 const app = new Hono()
 const PORT = parseInt(process.env.PORT || '3000')
@@ -90,17 +91,29 @@ async function queryPeer(peer, q) {
   }
 }
 
-// Search endpoint — fans out to peers when not local
+// Smart-search result cache (rewrite+rerank is AI-backed, so memoise it).
+const searchCache = new Map() // key -> { at, payload }
+const SEARCH_TTL = 10 * 60 * 1000
+// Hard wall-clock budget for the AI enhancement. If exceeded we serve the raw
+// keyword hits already in hand — search must never hang on a slow model call.
+const SMART_BUDGET_MS = parseInt(process.env.SMART_BUDGET_MS || '2600')
+
+// Search endpoint — fans out to peers when not local. In smart mode (default
+// from the frontend) it AI-rewrites the query, unions those hits, and reranks.
 app.get('/search', async (c) => {
   const q = c.req.query('q')?.trim()
   const page = Math.max(0, parseInt(c.req.query('page') ?? '0'))
   const local = c.req.query('local') === '1'
-  const rerank = c.req.query('rerank') === '1' && page === 0
+  const smart = c.req.query('smart') === '1' && page === 0 && !local
+  const rerank = c.req.query('rerank') === '1' && page === 0 && !smart
 
   if (!q) return c.json({ error: 'missing q' }, 400)
 
+  const ck = `s:${q.toLowerCase()}`
+  if (smart) { const hit = searchCache.get(ck); if (hit && Date.now() - hit.at < SEARCH_TTL) return c.json(hit.payload) }
+
   const offset = page * 10
-  const local$ = meiliSearch(q, offset, rerank ? 20 : 10) // over-fetch when reranking
+  const local$ = meiliSearch(q, offset, (smart || rerank) ? 20 : 10) // over-fetch to give the reranker room
   // Skip benched peers entirely so an unreachable node costs nothing (not even a timeout).
   const now = Date.now()
   const livePeers = local ? [] : [...peers.values()].filter(p => (peerBenchedUntil.get(p.url) ?? 0) <= now)
@@ -110,24 +123,38 @@ app.get('/search', async (c) => {
 
   // Deduplicate and merge peer hits
   const seen = new Set(localResult.hits?.map(h => h.url) ?? [])
-  const peerHits = peerResults
-    .flat()
-    .filter(h => !seen.has(h.url))
-    .slice(0, 5)
+  const peerHits = peerResults.flat().filter(h => !seen.has(h.url)).slice(0, 5)
 
   let hits = [...(localResult.hits ?? []), ...peerHits]
-  if (rerank) hits = (await rerankHits(q, hits)).slice(0, 10)
-
-  return c.json({
-    hits,
-    total: (localResult.estimatedTotalHits ?? 0) + peerHits.length,
-    page,
-    query: q,
-    nodeId: NODE_ID,
-    reranked: rerank,
-    peers: [...peers.keys()],
-    peersQueried: livePeers.length,
+  const baseTotal = (localResult.estimatedTotalHits ?? 0) + peerHits.length
+  const mkPayload = (h, extra = {}) => ({
+    hits: h, total: baseTotal, page, query: q, nodeId: NODE_ID,
+    peers: [...peers.keys()], peersQueried: livePeers.length, ...extra,
   })
+
+  if (smart) {
+    // AI enhancement: rewrite → union → rerank. Raced against the budget; the
+    // full result still populates the cache if it finishes after we've replied.
+    const enhance = (async () => {
+      const rewrite = await rewriteQuery(q)
+      let pool = hits
+      if (rewrite) {
+        const rw = await meiliSearch(rewrite, 0, 20)
+        const s2 = new Set(pool.map(h => h.url))
+        pool = [...pool, ...(rw.hits ?? []).filter(h => !s2.has(h.url))]
+      }
+      const ranked = (await rerankHits(q, pool)).slice(0, 10)
+      return mkPayload(ranked, { smart: true, rewrite })
+    })()
+    enhance.then(p => searchCache.set(ck, { at: Date.now(), payload: p })).catch(() => {})
+    const raced = await Promise.race([enhance, new Promise(r => setTimeout(() => r(null), SMART_BUDGET_MS))])
+    if (raced) return c.json(raced)
+    return c.json(mkPayload(hits.slice(0, 10), { smart: false })) // budget blown → raw fallback
+  }
+
+  hits = hits.slice(0, 10)
+  if (rerank) hits = (await rerankHits(q, hits)).slice(0, 10)
+  return c.json(mkPayload(hits, { reranked: rerank }))
 })
 
 // AI answer box — cited RAG over the index with Claude.
@@ -177,6 +204,28 @@ app.get('/answer', async (c) => {
     return c.json(payload)
   } catch (e) {
     return c.json({ answer: null, sources, query: q, error: e.message }, 502)
+  }
+})
+
+// Smart panel — instant answers, Wikipedia knowledge panel, AI query
+// understanding + related searches. Best-effort, short-cached.
+const instantCache = new Map() // q -> { at, payload }
+app.get('/instant', async (c) => {
+  const q = c.req.query('q')?.trim()
+  if (!q) return c.json({ error: 'missing q' }, 400)
+  const key = q.toLowerCase()
+  const cached = instantCache.get(key)
+  // Cache 10min normally, but only 45s when a live clock/weather widget is present.
+  if (cached) {
+    const ttl = cached.payload?.widgets?.time || cached.payload?.widgets?.weather ? 45_000 : 600_000
+    if (Date.now() - cached.at < ttl) return c.json(cached.payload)
+  }
+  try {
+    const payload = await instant(q)
+    instantCache.set(key, { at: Date.now(), payload })
+    return c.json(payload)
+  } catch (e) {
+    return c.json({ query: q, widgets: {}, wiki: null, related: [], hasPanel: false, error: e.message })
   }
 })
 
