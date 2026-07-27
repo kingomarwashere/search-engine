@@ -385,8 +385,37 @@ function resultsPage(q: string, data: any, page: number) {
             .catch(function () {});
         })();
       </script>
-      ${results}
+      <div id="results-list">${results}</div>
       ${hits.length ? `<div class="pagination">${prevLink}${nextLink}</div>` : ''}
+      <script>
+        (function () {
+          var q = ${JSON.stringify(q)}, page = ${page};
+          if (page !== 0) return;
+          var list = document.getElementById('results-list');
+          if (!list) return;
+          function esc(t){ return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+          function attr(t){ return esc(t).replace(/"/g,'&quot;'); }
+          function render(h){
+            var title = (h._formatted && h._formatted.title) || esc(h.title || h.domain);
+            var snip = (h._formatted && h._formatted.description) || esc(h.description || '');
+            return '<div class="result"><div class="result-url">' + esc(h.url) + '</div>' +
+              '<div class="result-title"><a href="' + attr(h.url) + '" rel="noopener">' + title + '</a></div>' +
+              (snip ? '<div class="result-snippet">' + snip + '</div>' : '') + '</div>';
+          }
+          // Fetch the AI-reranked results; if the first call raced past the budget
+          // (smart:false), the server finishes and caches shortly after, so retry once.
+          function go(attempt){
+            fetch('/api/search?q=' + encodeURIComponent(q) + '&smart=1')
+              .then(function(r){ return r.json(); })
+              .then(function(d){
+                if (d && d.smart && d.hits && d.hits.length) { list.innerHTML = d.hits.map(render).join(''); return; }
+                if (attempt < 1) setTimeout(function(){ go(attempt + 1); }, 2600);
+              })
+              .catch(function(){});
+          }
+          go(0);
+        })();
+      </script>
       <div class="footer">
         <a href="https://theradicalparty.com">theradicalparty.com</a>
         &nbsp;&mdash;&nbsp;
@@ -468,8 +497,11 @@ Sitemap: ${SITE}/sitemap.xml
       const page = Math.max(0, parseInt(url.searchParams.get('page') ?? '0'))
 
       try {
+        // SSR fetches raw results (fast). The smart rewrite+rerank is applied
+        // client-side as a progressive upgrade so first paint is never blocked
+        // on the AI round-trips.
         const apiRes = await fetch(
-          `${env.API_URL}/search?q=${encodeURIComponent(q)}&page=${page}&smart=1`,
+          `${env.API_URL}/search?q=${encodeURIComponent(q)}&page=${page}`,
           { headers: { 'User-Agent': 'SearchFrontend/1.0' } }
         )
         const data = await apiRes.json() as any
