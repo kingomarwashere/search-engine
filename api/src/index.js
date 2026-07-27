@@ -198,7 +198,14 @@ app.get('/answer', async (c) => {
       signal: AbortSignal.timeout(20000),
     })
     const data = await res.json()
-    const answer = data.content?.map(b => b.text).join('') ?? null
+    let answer = data.content?.map(b => b.text).join('') ?? null
+    // Drop non-answers: when the crawl lacks relevant pages the model correctly
+    // says "the sources don't contain…", but surfacing that (with unrelated
+    // citations) is worse than showing nothing — the web results/knowledge panel
+    // speak for themselves.
+    if (answer && /\b(do(es)? ?n['o]?t|cannot|can['o]?t|couldn['o]?t|unable to|no (information|answer|relevant))\b[\s\S]{0,40}\b(contain|answer|find|information|provide|relevant|address|mention)\b/i.test(answer)) {
+      answer = null
+    }
     const payload = { answer, sources, query: q, model: ANSWER_MODEL }
     answerCache.set(key, { at: Date.now(), payload })
     return c.json(payload)

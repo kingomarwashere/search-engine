@@ -297,6 +297,17 @@ function resultsPage(q: string, data: any, page: number) {
               body = document.getElementById('answer-body'),
               srcEl = document.getElementById('answer-sources');
           function esc(t){ return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+          // Share one /instant fetch with the smart-panel script.
+          var instantP = window.__instantP || (window.__instantP = fetch('/api/instant?q=' + encodeURIComponent(q)).then(function (r) { return r.json(); }).catch(function () { return null; }));
+          instantP.then(function (inst) {
+            // If a self-contained instant widget already answers the query, the
+            // crawl-RAG answer is redundant (and often a "sources don't contain…"
+            // non-answer over unrelated pages) — skip it entirely.
+            var w = (inst && inst.widgets) || {};
+            if (w.calc || w.time || w.weather || w.unit || w.currency || w.dictionary) return;
+            fetchAnswer();
+          });
+          function fetchAnswer() {
           fetch('/api/answer?q=' + encodeURIComponent(q))
             .then(function (r) { return r.json(); })
             .then(function (d) {
@@ -313,6 +324,7 @@ function resultsPage(q: string, data: any, page: number) {
               card.classList.remove('hidden');
             })
             .catch(function () {});
+          }
         })();
       </script>
       <script>
@@ -366,8 +378,8 @@ function resultsPage(q: string, data: any, page: number) {
             var chips = rel.map(function(r){ return '<a href="/search?q=' + encodeURIComponent(r) + '">' + esc(r) + '</a>'; }).join('');
             return '<div class="related"><div class="related-label">Related searches</div>' + chips + '</div>';
           }
-          fetch('/api/instant?q=' + encodeURIComponent(q))
-            .then(function (r) { return r.json(); })
+          var instantP = window.__instantP || (window.__instantP = fetch('/api/instant?q=' + encodeURIComponent(q)).then(function (r) { return r.json(); }).catch(function () { return null; }));
+          instantP
             .then(function (d) {
               if (!d || !d.hasPanel) return;
               var w = d.widgets || {}, html = '';
