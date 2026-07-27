@@ -28,7 +28,9 @@ function parseCalc(q) {
     if (isFinite(v)) return { expression: q.trim(), result: (Math.round(v * 1e6) / 1e6).toLocaleString('en-US') }
   }
   let e = q.trim().toLowerCase()
-    .replace(/^(calc(ulate)?|what is|whats|how much is|=)\s+/i, '')
+    .replace(/^(calc(ulate)?|what(?:'s| is)?|whats|how much is|=)\s+/i, '')
+    .replace(/\b(multiplied by|times)\b/g, '*').replace(/\b(divided by|over)\b/g, '/')
+    .replace(/\bplus\b/g, '+').replace(/\b(minus|less)\b/g, '-')
     .replace(/[×✕]/g, '*').replace(/[÷]/g, '/').replace(/\bx\b/g, '*')
     .replace(/\^/g, '**').replace(/,/g, '').replace(/\s+/g, '')
   if (!e || e.length > 120) return null
@@ -200,11 +202,15 @@ async function parseWeather(q) {
   if (!place || place.length > 60) return null
   // Geocode via Nominatim (Open-Meteo's geocoding host is unreachable from this
   // box's network; Nominatim + Open-Meteo forecast is the reachable combination).
-  const geo = await getJson(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(place)}&format=json&limit=1&accept-language=en`, { timeout: 4000 })
-  const g = Array.isArray(geo) ? geo[0] : null
+  // Fetch several candidates and pick the most prominent (highest importance) so
+  // "sydney" resolves to Sydney AU, not a tiny townland that matched by name.
+  const geo = await getJson(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(place)}&format=json&limit=5&addressdetails=1&accept-language=en`, { timeout: 4000 })
+  if (!Array.isArray(geo) || !geo.length) return null
+  const g = geo.slice().sort((a, b) => (b.importance || 0) - (a.importance || 0))[0]
   if (!g?.lat || !g?.lon) return null
-  const parts = (g.display_name || place).split(',').map(s => s.trim())
-  const label = parts.length > 1 ? `${parts[0]}, ${parts[parts.length - 1]}` : parts[0]
+  const ad = g.address || {}
+  const city = ad.city || ad.town || ad.village || ad.municipality || ad.county || (g.display_name || place).split(',')[0].trim()
+  const label = [city, ad.country].filter(Boolean).join(', ')
   const fc = await getJson(`https://api.open-meteo.com/v1/forecast?latitude=${g.lat}&longitude=${g.lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&timezone=auto`, { timeout: 4000 })
   const cur = fc?.current
   if (!cur) return null
