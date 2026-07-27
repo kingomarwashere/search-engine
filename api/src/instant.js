@@ -259,6 +259,98 @@ async function parseAviation(icao) {
   }
 }
 
+// NAIPS (Airservices Australia) — fallback METAR/TAF for AU aerodromes the NOAA
+// feed doesn't carry (e.g. YSBK Bankstown). Pure HTTP (no browser), session cached.
+const NAIPS_USER = process.env.NAIPS_USER
+const NAIPS_PASS = process.env.NAIPS_PASS
+const NAIPS_BASE = 'https://www.airservicesaustralia.com/naips'
+let naipsSession = null // { jar: Map, at }
+
+function cookieHeader(jar) { return [...jar].map(([k, v]) => `${k}=${v}`).join('; ') }
+function absorbCookies(res, jar) {
+  const list = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : []
+  for (const c of list) {
+    const kv = c.split(';')[0], i = kv.indexOf('=')
+    if (i > 0) jar.set(kv.slice(0, i).trim(), kv.slice(i + 1).trim())
+  }
+}
+async function naipsJar() {
+  if (naipsSession && Date.now() - naipsSession.at < 15 * 60 * 1000) return naipsSession.jar
+  const jar = new Map(), h = { 'User-Agent': UA }
+  let r = await fetch(`${NAIPS_BASE}/Account/Logon`, { headers: h, redirect: 'manual', signal: AbortSignal.timeout(8000) })
+  absorbCookies(r, jar)
+  r = await fetch(`${NAIPS_BASE}/Account/Logon`, {
+    method: 'POST', redirect: 'manual',
+    headers: { ...h, 'Content-Type': 'application/x-www-form-urlencoded', 'Cookie': cookieHeader(jar) },
+    body: new URLSearchParams({ UserName: NAIPS_USER, Password: NAIPS_PASS }).toString(),
+    signal: AbortSignal.timeout(10000),
+  })
+  absorbCookies(r, jar)
+  naipsSession = { jar, at: Date.now() }
+  return jar
+}
+function parseMetarRaw(raw) {
+  const r = raw.replace(/\s+/g, ' ').trim()
+  const windM = r.match(/\b(VRB|\d{3})(\d{2,3})(G(\d{2,3}))?(KT|MPS)\b/)
+  const visM  = r.match(/\b(9999|\d{4})\b/)
+  const tempM = r.match(/\b(M?\d{2})\/(M?\d{2})\b/)
+  const qnhM  = r.match(/\bQ(\d{4})\b/) || r.match(/\bA(\d{4})\b/)
+  const sky   = [...r.matchAll(/\b(FEW|SCT|BKN|OVC)(\d{3})\b/g)].map(s => ({ cover: s[1], base: parseInt(s[2]) * 100 }))
+  const pt = t => t ? (t.startsWith('M') ? -parseInt(t.slice(1)) : parseInt(t)) : null
+  const cover = sky.find(s => ['BKN', 'OVC'].includes(s.cover))
+  const ceilFt = cover ? cover.base : Infinity
+  const vis = visM ? parseInt(visM[1]) : null
+  const visM_ = vis ? (vis === 9999 ? 99 : vis / 1609) : 99
+  let fcat = 'VFR'
+  if (ceilFt < 500 || visM_ < 1) fcat = 'LIFR'
+  else if (ceilFt < 1000 || visM_ < 3) fcat = 'IFR'
+  else if (ceilFt < 3000 || visM_ < 5) fcat = 'MVFR'
+  return {
+    fcat, temp: pt(tempM?.[1]), dp: pt(tempM?.[2]),
+    windDir: windM ? (windM[1] === 'VRB' ? null : parseInt(windM[1])) : null,
+    windKt: windM ? parseInt(windM[2]) : null, gustKt: windM?.[4] ? parseInt(windM[4]) : null,
+    vis, qnh: qnhM ? parseInt(qnhM[1]) : null, sky,
+  }
+}
+function naipsBlock(text, icao, kind) {
+  const m = text.match(new RegExp(`${kind}\\s+(?:AMD\\s+|COR\\s+)?${icao}\\s+\\d{6}Z[\\s\\S]*?(?=\\n\\s*\\n|©|$)`, 'i'))
+  return m ? m[0].replace(/\s+/g, ' ').trim() : null
+}
+async function naipsAviation(icao) {
+  if (!NAIPS_USER || !NAIPS_PASS) return null
+  try {
+    let jar = await naipsJar()
+    const post = () => {
+      const body = new URLSearchParams()
+      body.append('Locations[0]', icao); body.append('Met', 'true'); body.append('Met', 'false')
+      body.append('NOTAM', 'false'); body.append('Validity', '3')
+      return fetch(`${NAIPS_BASE}/Briefing/Location`, {
+        method: 'POST', redirect: 'manual',
+        headers: { 'User-Agent': UA, 'Content-Type': 'application/x-www-form-urlencoded', 'Cookie': cookieHeader(jar) },
+        body: body.toString(), signal: AbortSignal.timeout(12000),
+      })
+    }
+    let r = await post()
+    let loc = r.headers.get('location') || ''
+    if (/Account\/Logon/i.test(loc)) { naipsSession = null; jar = await naipsJar(); r = await post(); loc = r.headers.get('location') || '' } // relogin once
+    if (!/LocationResults/i.test(loc)) return null
+    const res = await fetch(new URL(loc, `${NAIPS_BASE}/`).href, { headers: { 'User-Agent': UA, 'Cookie': cookieHeader(jar) }, signal: AbortSignal.timeout(10000) })
+    const t = (await res.text()).replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/[ \t]+/g, ' ')
+    const metar = naipsBlock(t, icao, 'METAR') || naipsBlock(t, icao, 'SPECI')
+    const taf = naipsBlock(t, icao, 'TAF')
+    if (!metar && !taf) return null
+    const nameM = t.match(new RegExp(`([A-Z][A-Z '/-]{2,30})\\s*\\(${icao}\\)`))
+    const p = metar ? parseMetarRaw(metar) : {}
+    return {
+      icao, name: nameM ? nameM[1].trim() : icao, source: 'NAIPS',
+      flightCategory: p.fcat || '', temp: p.temp ?? null, dewp: p.dp ?? null,
+      wind: { dir: p.windDir ?? null, speed: p.windKt ?? null, gust: p.gustKt ?? null },
+      visib: p.vis != null ? String(p.vis) : '', altim: p.qnh ?? null,
+      clouds: p.sky || [], rawMetar: metar || '', rawTaf: taf || '', obsTime: '',
+    }
+  } catch { return null }
+}
+
 // ───────────────────────── Wikipedia knowledge panel ─────────────────────────
 async function wikiSummary(title) {
   if (!title) return null
@@ -349,9 +441,14 @@ export async function instant(q) {
   if (dict) widgets.dictionary = dict
   if (weather) widgets.weather = weather
 
-  // Aviation: use the code from the query, else the AI-resolved ICAO (airport names).
+  // Aviation: code from the query, else the AI-resolved ICAO (airport names).
+  // NOAA AWC first; for AU aerodromes it lacks (e.g. YSBK), fall back to NAIPS.
   let aviation = aviation0
-  if (!aviation && avIntent && classify?.icao) aviation = await parseAviation(classify.icao)
+  const icao = avIntent?.icao || (avIntent?.needsResolve ? classify?.icao : null)
+  if (avIntent && !aviation && icao) {
+    if (!avIntent.icao) aviation = await parseAviation(icao)          // classify-resolved code → try AWC
+    if (!aviation && /^Y[A-Z]{3}$/i.test(icao)) aviation = await naipsAviation(icao.toUpperCase()) // AU fallback
+  }
   if (aviation) widgets.aviation = aviation
 
   // 3. Resolve a time query the static map couldn't (AI supplies the IANA zone).
