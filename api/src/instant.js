@@ -21,6 +21,12 @@ async function getJson(url, { timeout = 4000, headers = {} } = {}) {
 // Safe arithmetic: the expression is whitelisted to digits/operators only
 // (no identifiers), so Function() can evaluate it without code-injection risk.
 function parseCalc(q) {
+  // "X% of Y" / "X percent of Y" → percentage
+  const pm = q.trim().toLowerCase().replace(/,/g, '').match(/^(?:what(?:'s| is)?\s+(?:is\s+)?)?([\d.]+)\s*(?:%|percent)\s+of\s+([\d.]+)\??$/)
+  if (pm) {
+    const v = parseFloat(pm[1]) / 100 * parseFloat(pm[2])
+    if (isFinite(v)) return { expression: q.trim(), result: (Math.round(v * 1e6) / 1e6).toLocaleString('en-US') }
+  }
   let e = q.trim().toLowerCase()
     .replace(/^(calc(ulate)?|what is|whats|how much is|=)\s+/i, '')
     .replace(/[×✕]/g, '*').replace(/[÷]/g, '/').replace(/\bx\b/g, '*')
@@ -192,7 +198,7 @@ async function parseWeather(q) {
   if (!m) return null
   const place = m[1].trim()
   if (!place || place.length > 60) return null
-  const geo = await getJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(place)}&count=1&language=en&format=json`, { timeout: 3000 })
+  const geo = await getJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(place)}&count=1&language=en&format=json`, { timeout: 4000 })
   const g = geo?.results?.[0]
   if (!g) return null
   const fc = await getJson(`https://api.open-meteo.com/v1/forecast?latitude=${g.latitude}&longitude=${g.longitude}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&timezone=auto`, { timeout: 3000 })
@@ -309,7 +315,11 @@ export async function instant(q) {
   //    Skip when a self-contained widget already answers the query.
   let wiki = null
   const hasWidget = widgets.calc || widgets.unit || widgets.currency || widgets.time || widgets.weather || widgets.dictionary
-  const wikiTitle = classify?.wiki || wikiFromSearch
+  // Prefer the AI-chosen article. Only fall back to a raw Wikipedia search hit
+  // for genuine entity/informational intents — never for calc/unit/currency/nav
+  // queries, where a keyword match (e.g. "240") is meaningless noise.
+  const wikiTitle = classify?.wiki
+    || (['entity', 'informational'].includes(classify?.intent) ? wikiFromSearch : null)
   if (wikiTitle && (!hasWidget || classify?.intent === 'entity')) {
     wiki = await wikiSummary(wikiTitle)
   }
