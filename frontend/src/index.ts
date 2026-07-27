@@ -120,7 +120,9 @@ const CSS = `
   .clock-place { font-size: 11px; color: var(--accent); text-transform: uppercase; letter-spacing: 1px; margin-top: 3px; }
   .clock-date { font-size: 11px; color: var(--snippet); margin-top: 2px; }
   .weather-row { display: flex; align-items: center; gap: 16px; }
-  .weather-emoji { font-size: 44px; line-height: 1; }
+  /* Force a colour-emoji font — the Roboto Mono webfont otherwise claims some
+     weather glyphs (e.g. 🌤️) and renders them as tofu/missing. */
+  .weather-emoji { font-size: 44px; line-height: 1; font-family: 'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji','Twemoji Mozilla',sans-serif; }
   .weather-temp { font-size: 34px; font-weight: 700; color: var(--title); }
   .weather-meta { font-size: 12px; color: var(--muted); line-height: 1.7; }
   .dict-pos { color: var(--accent); font-style: italic; font-size: 12px; margin-right: 6px; }
