@@ -129,6 +129,15 @@ const CSS = `
   .dict-def { font-size: 13px; color: var(--text); line-height: 1.6; margin: 3px 0 9px; }
   .dict-phon { font-size: 12px; color: var(--muted); margin-left: 8px; }
 
+  /* Aviation (METAR/TAF) */
+  .avn-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .avn-name { font-size: 15px; font-weight: 700; color: var(--title); }
+  .avn-cat { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 3px; letter-spacing: 1px; }
+  .avn-decoded { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px; color: var(--muted); margin: 11px 0 4px; }
+  .avn-decoded b { color: var(--text); font-weight: 500; }
+  .avn-raw-label { font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); margin: 10px 0 3px; }
+  .avn-raw { font-size: 12px; color: var(--snippet); background: var(--bg); border: 1px solid var(--border); padding: 8px 10px; white-space: pre-wrap; word-break: break-word; line-height: 1.55; }
+
   /* Wikipedia knowledge panel */
   .kp { background: var(--surface); border: 1px solid var(--border); padding: 16px 18px; display: flex; gap: 16px; align-items: flex-start; }
   .kp-thumb { flex-shrink: 0; }
@@ -306,7 +315,7 @@ function resultsPage(q: string, data: any, page: number) {
             // crawl-RAG answer is redundant (and often a "sources don't contain…"
             // non-answer over unrelated pages) — skip it entirely.
             var w = (inst && inst.widgets) || {};
-            if (w.calc || w.time || w.weather || w.unit || w.currency || w.dictionary) return;
+            if (w.calc || w.time || w.weather || w.unit || w.currency || w.dictionary || w.aviation) return;
             fetchAnswer();
           });
           function fetchAnswer() {
@@ -369,6 +378,25 @@ function resultsPage(q: string, data: any, page: number) {
             }
             tick(); setInterval(tick, 1000);
           }
+          function catColor(c){ return ({VFR:'#3fb950',MVFR:'#58a6ff',IFR:'#f85149',LIFR:'#ff5cf4'})[c] || 'var(--muted)'; }
+          function aviationWidget(a){
+            var wd = a.wind || {};
+            var wind = (wd.speed != null)
+              ? ((wd.dir == null || wd.dir === 'VRB') ? 'VRB' : esc(wd.dir) + '°') + ' @ ' + esc(wd.speed) + 'kt' + (wd.gust ? ' G' + esc(wd.gust) : '')
+              : '—';
+            var col = catColor(a.flightCategory);
+            var cat = a.flightCategory ? '<span class="avn-cat" style="background:' + col + '22;color:' + col + '">' + esc(a.flightCategory) + '</span>' : '';
+            var head = '<div class="avn-head"><span class="avn-name">' + esc(a.icao) + ' — ' + esc(a.name) + '</span>' + cat + '</div>';
+            var dec = '<div class="avn-decoded">' +
+              (a.temp != null ? '<span>🌡️ <b>' + esc(a.temp) + '°C</b>' + (a.dewp != null ? ' / dew ' + esc(a.dewp) + '°C' : '') + '</span>' : '') +
+              '<span>💨 <b>' + wind + '</b></span>' +
+              (a.visib ? '<span>👁️ <b>' + esc(a.visib) + '</b></span>' : '') +
+              (a.altim ? '<span>QNH <b>' + esc(a.altim) + ' hPa</b></span>' : '') +
+              '</div>';
+            var raw = '<div class="avn-raw-label">METAR</div><div class="avn-raw">' + esc(a.rawMetar) + '</div>';
+            if (a.rawTaf) raw += '<div class="avn-raw-label">TAF</div><div class="avn-raw">' + esc(a.rawTaf) + '</div>';
+            return widget('Aviation weather', head + dec + raw);
+          }
           function kp(wk){
             var thumb = wk.thumbnail ? '<div class="kp-thumb"><img src="' + attr(wk.thumbnail) + '" alt="" loading="lazy"></div>' : '';
             return '<div class="kp">' + thumb + '<div class="kp-body"><div class="kp-title">' + esc(wk.title) + '</div>' +
@@ -389,6 +417,7 @@ function resultsPage(q: string, data: any, page: number) {
               if (w.unit)     html += widget('Conversion', '<div class="iwidget-main">' + esc(w.unit.label) + '</div>');
               if (w.currency) html += widget('Currency', '<div class="iwidget-main">' + esc(w.currency.label) + '</div><div class="iwidget-sub">Live market rate</div>');
               if (w.dictionary) html += dictWidget(w.dictionary);
+              if (w.aviation) html += aviationWidget(w.aviation);
               if (w.weather)  html += weatherWidget(w.weather);
               if (w.time)     html += timeWidget(w.time);
               if (d.wiki)     html += kp(d.wiki);

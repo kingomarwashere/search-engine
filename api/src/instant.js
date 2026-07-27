@@ -223,6 +223,42 @@ async function parseWeather(q) {
   }
 }
 
+// ───────────────────────── Aviation (METAR/TAF, for pilots & nerds) ─────────────────────────
+// Data from NOAA's Aviation Weather Center — free, global, no auth, same raw
+// METAR/TAF you'd pull from NAIPS.
+function aviationIntent(q) {
+  const s = q.trim().toLowerCase()
+  const kw = /\b(metar|taf|atis|notam|airport|aviation|icao|wx)\b/.test(s)
+  const codeM = q.toUpperCase().match(/\b([A-Z]{4})\b/)
+  const code = codeM ? codeM[1] : null
+  if (code && (kw || /^[a-z]{4}$/.test(s))) return { icao: code }
+  if (kw) return { needsResolve: true }
+  return null
+}
+async function parseAviation(icao) {
+  if (!icao) return null
+  const [metar, taf] = await Promise.all([
+    getJson(`https://aviationweather.gov/api/data/metar?ids=${icao}&format=json`, { timeout: 4500 }),
+    getJson(`https://aviationweather.gov/api/data/taf?ids=${icao}&format=json`, { timeout: 4500 }),
+  ])
+  const m = Array.isArray(metar) ? metar[0] : null
+  if (!m || !m.rawOb) return null
+  const t = Array.isArray(taf) ? taf[0] : null
+  return {
+    icao: m.icaoId || icao,
+    name: m.name || icao,
+    flightCategory: m.fltCat || '',
+    temp: m.temp, dewp: m.dewp,
+    wind: { dir: m.wdir, speed: m.wspd, gust: m.wgst ?? null },
+    visib: m.visib != null ? String(m.visib) : '',
+    altim: m.altim ? Math.round(m.altim) : null,
+    clouds: Array.isArray(m.clouds) ? m.clouds.filter(c => c.base != null).map(c => ({ cover: c.cover, base: c.base })) : [],
+    rawMetar: m.rawOb,
+    rawTaf: t?.rawTAF || '',
+    obsTime: m.reportTime || m.obsTime || '',
+  }
+}
+
 // ───────────────────────── Wikipedia knowledge panel ─────────────────────────
 async function wikiSummary(title) {
   if (!title) return null
@@ -269,7 +305,7 @@ function extractJson(text) {
 async function aiClassify(q) {
   const text = await anthropic(
     'You are the query-understanding brain of a web search engine. Given a user query, reply with ONLY a JSON object, no prose:\n' +
-    '{"intent":"time|weather|calc|unit|currency|dictionary|entity|informational|navigational","wiki":"exact English Wikipedia article title that best matches the query subject, or empty string if none applies","timezone":"IANA tz name if this is a time query about a specific place, else empty","related":["4 short useful follow-up search queries"]}\n' +
+    '{"intent":"time|weather|aviation|calc|unit|currency|dictionary|entity|informational|navigational","wiki":"exact English Wikipedia article title that best matches the query subject, or empty string if none applies","timezone":"IANA tz name if this is a time query about a specific place, else empty","icao":"4-letter ICAO airport code if the query is about a specific airport (e.g. sydney airport → YSSY, JFK → KJFK), else empty","related":["4 short useful follow-up search queries"]}\n' +
     'Pick "wiki" for people, places, organisations, concepts, events, products — anything with an encyclopedia entry. Leave it empty for pure calculations, navigational or transactional queries.',
     `Query: ${q}`,
     { maxTokens: 250, timeout: 6000 }
@@ -298,18 +334,25 @@ export async function instant(q) {
   const calc = parseCalc(query); if (calc) widgets.calc = calc
   const unit = !calc ? parseUnit(query) : null; if (unit) widgets.unit = unit
   let timeW = parseTimeLocal(query)
+  const avIntent = aviationIntent(query)
 
   // 2. Network widgets + AI classify, all in parallel, all best-effort.
-  const [currency, dict, weather, classify, wikiFromSearch] = await Promise.all([
+  const [currency, dict, weather, aviation0, classify, wikiFromSearch] = await Promise.all([
     (!calc && !unit) ? parseCurrency(query) : null,
     parseDictionary(query),
-    parseWeather(query),
+    avIntent ? null : parseWeather(query),   // don't double-fetch weather for airport queries
+    avIntent?.icao ? parseAviation(avIntent.icao) : null,
     aiClassify(query),
     wikiSearch(query),
   ])
   if (currency) widgets.currency = currency
   if (dict) widgets.dictionary = dict
   if (weather) widgets.weather = weather
+
+  // Aviation: use the code from the query, else the AI-resolved ICAO (airport names).
+  let aviation = aviation0
+  if (!aviation && avIntent && classify?.icao) aviation = await parseAviation(classify.icao)
+  if (aviation) widgets.aviation = aviation
 
   // 3. Resolve a time query the static map couldn't (AI supplies the IANA zone).
   if (timeW?.needsResolve) {
@@ -324,7 +367,7 @@ export async function instant(q) {
   // 4. Wikipedia knowledge panel — prefer the AI-chosen article, else the search hit.
   //    Skip when a self-contained widget already answers the query.
   let wiki = null
-  const hasWidget = widgets.calc || widgets.unit || widgets.currency || widgets.time || widgets.weather || widgets.dictionary
+  const hasWidget = widgets.calc || widgets.unit || widgets.currency || widgets.time || widgets.weather || widgets.dictionary || widgets.aviation
   // Prefer the AI-chosen article. Only fall back to a raw Wikipedia search hit
   // for genuine entity/informational intents — never for calc/unit/currency/nav
   // queries, where a keyword match (e.g. "240") is meaningless noise.
