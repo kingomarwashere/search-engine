@@ -198,15 +198,19 @@ async function parseWeather(q) {
   if (!m) return null
   const place = m[1].trim()
   if (!place || place.length > 60) return null
-  const geo = await getJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(place)}&count=1&language=en&format=json`, { timeout: 4000 })
-  const g = geo?.results?.[0]
-  if (!g) return null
-  const fc = await getJson(`https://api.open-meteo.com/v1/forecast?latitude=${g.latitude}&longitude=${g.longitude}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&timezone=auto`, { timeout: 3000 })
+  // Geocode via Nominatim (Open-Meteo's geocoding host is unreachable from this
+  // box's network; Nominatim + Open-Meteo forecast is the reachable combination).
+  const geo = await getJson(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(place)}&format=json&limit=1`, { timeout: 4000 })
+  const g = Array.isArray(geo) ? geo[0] : null
+  if (!g?.lat || !g?.lon) return null
+  const parts = (g.display_name || place).split(',').map(s => s.trim())
+  const label = parts.length > 1 ? `${parts[0]}, ${parts[parts.length - 1]}` : parts[0]
+  const fc = await getJson(`https://api.open-meteo.com/v1/forecast?latitude=${g.lat}&longitude=${g.lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&timezone=auto`, { timeout: 4000 })
   const cur = fc?.current
   if (!cur) return null
   const [desc, emoji] = WCODE[cur.weather_code] || ['—','🌡️']
   return {
-    place: [g.name, g.admin1, g.country].filter(Boolean).join(', '),
+    place: label,
     emoji, desc,
     temp: Math.round(cur.temperature_2m), feelsLike: Math.round(cur.apparent_temperature),
     humidity: cur.relative_humidity_2m, wind: Math.round(cur.wind_speed_10m), unit: '°C',
