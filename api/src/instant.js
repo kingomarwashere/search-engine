@@ -5,6 +5,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { extraWidgets } from './widgets.js'
 
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY
 const ANSWER_MODEL = process.env.ANSWER_MODEL || 'claude-haiku-4-5'
@@ -453,17 +454,22 @@ export async function instant(q) {
   const avIntent = aviationIntent(query)
 
   // 2. Network widgets + AI classify, all in parallel, all best-effort.
-  const [currency, dict, weather, aviation0, classify, wikiFromSearch] = await Promise.all([
+  //    `extra` is the dev-tools / nerd-data / rich-card / markets pack from
+  //    widgets.js — every parser in it is intent-gated, so this is ~free unless
+  //    the query actually matches one of them.
+  const [currency, dict, weather, aviation0, classify, wikiFromSearch, extra] = await Promise.all([
     (!calc && !unit) ? parseCurrency(query) : null,
     parseDictionary(query),
     avIntent ? null : parseWeather(query),   // don't double-fetch weather for airport queries
     avIntent?.icao ? parseAviation(avIntent.icao) : null,
     aiClassify(query),
     wikiSearch(query),
+    extraWidgets(query).catch(() => ({})),
   ])
   if (currency) widgets.currency = currency
   if (dict) widgets.dictionary = dict
   if (weather) widgets.weather = weather
+  Object.assign(widgets, extra)
 
   // Aviation: code from the query, else the AI-resolved ICAO (airport names).
   // NOAA AWC first; for AU aerodromes it lacks (e.g. YSBK), fall back to NAIPS.
@@ -490,7 +496,8 @@ export async function instant(q) {
   // 4. Wikipedia knowledge panel — prefer the AI-chosen article, else the search hit.
   //    Skip when a self-contained widget already answers the query.
   let wiki = null
-  const hasWidget = widgets.calc || widgets.unit || widgets.currency || widgets.time || widgets.weather || widgets.dictionary || widgets.aviation
+  const hasExtra = Object.keys(extra).length > 0
+  const hasWidget = widgets.calc || widgets.unit || widgets.currency || widgets.time || widgets.weather || widgets.dictionary || widgets.aviation || hasExtra
   // Prefer the AI-chosen article. Only fall back to a raw Wikipedia search hit
   // for genuine entity/informational intents — never for calc/unit/currency/nav
   // queries, where a keyword match (e.g. "240") is meaningless noise.

@@ -153,7 +153,24 @@ const CSS = `
   .related-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); width: 100%; margin-bottom: 2px; }
   .related a { font-size: 12px; color: var(--muted); border: 1px solid var(--border); padding: 5px 12px; border-radius: 999px; transition: border-color .15s, color .15s; }
   .related a:hover { border-color: var(--accent); color: var(--accent); }
-  @media (max-width: 480px) { .kp-thumb img { width: 64px; height: 64px; } .iwidget-main { font-size: 22px; } }
+  /* Extra widgets: dev tools, nerd data, rich cards, markets */
+  .iwidget-rows { display: grid; grid-template-columns: auto 1fr; gap: 5px 16px; font-size: 13px; margin-top: 11px; }
+  .iwidget-rows dt { color: var(--muted); }
+  .iwidget-rows dd { color: var(--text); margin: 0; word-break: break-word; }
+  .mono { font-family: 'Roboto Mono', ui-monospace, monospace; }
+  .iwidget-main.mono { font-size: 18px; word-break: break-all; }
+  .color-swatch { display: inline-block; width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--border); vertical-align: middle; margin-left: 10px; }
+  .list-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); font-size: 13px; color: var(--text); }
+  .list-row:first-of-type { border-top: 0; padding-top: 2px; }
+  .mag { font-weight: 700; padding: 1px 7px; border-radius: 3px; font-size: 12px; }
+  .up { color: #3fb950; } .down { color: #f85149; }
+  .movie-card { display: flex; gap: 16px; }
+  .movie-poster { width: 92px; height: 138px; object-fit: cover; border: 1px solid var(--border); flex-shrink: 0; }
+  @media (max-width: 480px) {
+    .kp-thumb img { width: 64px; height: 64px; }
+    .iwidget-main { font-size: 22px; }
+    .movie-poster { width: 72px; height: 108px; }
+  }
 `
 
 const THEME_JS = `
@@ -315,7 +332,7 @@ function resultsPage(q: string, data: any, page: number) {
             // crawl-RAG answer is redundant (and often a "sources don't contain…"
             // non-answer over unrelated pages) — skip it entirely.
             var w = (inst && inst.widgets) || {};
-            if (w.calc || w.time || w.weather || w.unit || w.currency || w.dictionary || w.aviation) return;
+            if (Object.keys(w).length) return;
             fetchAnswer();
           });
           function fetchAnswer() {
@@ -408,6 +425,120 @@ function resultsPage(q: string, data: any, page: number) {
             var chips = rel.map(function(r){ return '<a href="/search?q=' + encodeURIComponent(r) + '">' + esc(r) + '</a>'; }).join('');
             return '<div class="related"><div class="related-label">Related searches</div>' + chips + '</div>';
           }
+          function ago(ms){ var s=Math.floor((Date.now()-ms)/1000); if(s<60)return s+'s ago'; var m=Math.floor(s/60); if(m<60)return m+'m ago'; var h=Math.floor(m/60); if(h<24)return h+'h ago'; return Math.floor(h/24)+'d ago'; }
+          function rows(rr){ return '<dl class="iwidget-rows">' + rr.map(function(r){ return '<dt>'+esc(r[0])+'</dt><dd class="' + (r[2]?'mono':'') + '">'+esc(r[1])+'</dd>'; }).join('') + '</dl>'; }
+          // ── Dev tools ──
+          function devWidget(d){
+            var main = '<div class="iwidget-main' + (d.mono?' mono':'') + '">' + esc(d.main) + (d.swatch?'<span class="color-swatch" style="background:'+attr(d.swatch)+'"></span>':'') + '</div>';
+            var sub = d.sub ? '<div class="iwidget-sub">' + esc(d.sub) + '</div>' : '';
+            var extra = d.rows ? rows(d.rows) : '';
+            return widget(d.label, main + sub + extra);
+          }
+          function dnsWidget(x){
+            var body = '<div class="iwidget-sub" style="margin:0 0 8px">' + esc(x.host) + ' &middot; ' + esc(x.type) + '</div>' +
+              x.records.map(function(r){ return '<div class="mono" style="font-size:14px;color:var(--title);line-height:1.7">' + esc(r) + '</div>'; }).join('');
+            return widget('DNS lookup', body);
+          }
+          function whoisWidget(x){
+            var rr = [];
+            if (x.registrar) rr.push(['Registrar', x.registrar]);
+            if (x.created) rr.push(['Registered', x.created]);
+            if (x.expires) rr.push(['Expires', x.expires]);
+            if (x.updated) rr.push(['Updated', x.updated]);
+            if (x.status) rr.push(['Status', x.status]);
+            if (x.ns && x.ns.length) rr.push(['Nameservers', x.ns.join(', ')]);
+            return widget('Whois — ' + esc(x.domain), rows(rr));
+          }
+          // ── Nerd data ──
+          function quakeWidget(x){
+            function magc(m){ return m>=6?'#f85149':m>=4.5?'#e3b341':'#58a6ff'; }
+            var body = x.quakes.map(function(e){
+              var mg = (e.mag!=null?e.mag.toFixed(1):'?');
+              return '<div class="list-row"><span><span class="mag" style="background:'+magc(e.mag)+'22;color:'+magc(e.mag)+'">M'+esc(mg)+'</span> ' +
+                (e.url?'<a href="'+attr(e.url)+'" rel="noopener" target="_blank">'+esc(e.place)+'</a>':esc(e.place)) + '</span>' +
+                '<span class="iwidget-sub" style="margin:0;white-space:nowrap">'+esc(ago(e.time))+'</span></div>';
+            }).join('');
+            return widget(x.title, body);
+          }
+          function issWidget(x){
+            return widget('ISS — live position',
+              '<div class="iwidget-main">' + esc(x.lat) + '°, ' + esc(x.lon) + '°</div>' +
+              '<div class="iwidget-sub">Over ' + esc(x.over) + ' &middot; ' + esc(x.altKm) + ' km up &middot; ' + esc(x.speedKmh.toLocaleString()) + ' km/h</div>' +
+              '<a class="kp-link" href="https://isstracker.pl/en" rel="noopener" target="_blank">Live map &rarr;</a>');
+          }
+          function launchWidget(x){
+            var body = x.launches.map(function(l){
+              var t = l.net ? new Date(l.net).toLocaleString('en-AU',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : 'TBD';
+              return '<div class="list-row"><span><b style="color:var(--title)">'+esc(l.name)+'</b>' + (l.pad?'<div class="iwidget-sub" style="margin:2px 0 0">'+esc(l.pad)+'</div>':'') + '</span>' +
+                '<span class="iwidget-sub" style="margin:0;white-space:nowrap;text-align:right">'+esc(t)+'</span></div>';
+            }).join('');
+            return widget(x.title, body);
+          }
+          function moonWidget(x){
+            return widget('Moon phase',
+              '<div class="weather-row"><div class="weather-emoji">'+esc(x.emoji)+'</div><div>' +
+              '<div class="weather-temp" style="font-size:26px">'+esc(x.name)+'</div>' +
+              '<div class="iwidget-sub">'+esc(x.illum)+'% illuminated &middot; '+esc(x.age)+' days old</div></div></div>');
+          }
+          function auroraWidget(x){
+            var col = x.kp>=7?'#ff5cf4':x.kp>=5?'#f85149':x.kp>=4?'#e3b341':'#3fb950';
+            return widget('Aurora / geomagnetic',
+              '<div class="iwidget-main" style="color:'+col+'">Kp ' + esc(x.kp) + '</div>' +
+              '<div class="iwidget-sub">'+esc(x.activity)+' &middot; '+esc(x.chance)+'</div>');
+          }
+          function sunWidget(x){
+            return widget('Sun times — ' + esc(x.place),
+              '<div class="clock-row"><div class="clock"><div class="clock-time" style="font-size:22px">'+esc(x.sunrise)+'</div><div class="clock-place">Sunrise</div></div>' +
+              '<div class="clock"><div class="clock-time" style="font-size:22px">'+esc(x.sunset)+'</div><div class="clock-place">Sunset</div></div>' +
+              (x.daylight?'<div class="clock"><div class="clock-time" style="font-size:22px">'+esc(x.daylight)+'</div><div class="clock-place">Daylight</div></div>':'') + '</div>');
+          }
+          function surfWidget(x){
+            var rr = [['Wave height', x.waveHeight + ' m']];
+            if (x.wavePeriod!=null) rr.push(['Period', x.wavePeriod + ' s']);
+            if (x.waveDir) rr.push(['Direction', x.waveDir]);
+            if (x.seaTemp!=null) rr.push(['Sea temp', x.seaTemp + '°C']);
+            return widget('Surf &middot; ' + esc(x.place), '<div class="iwidget-main">🌊 ' + esc(x.waveHeight) + ' m</div>' + rows(rr));
+          }
+          // ── Rich cards ──
+          function movieWidget(x){
+            var meta = [x.year, x.kind==='tv'?'TV':'', x.runtime, x.seasons].filter(Boolean).join(' &middot; ');
+            var g = x.genres && x.genres.length ? '<div class="iwidget-sub">'+esc(x.genres.join(', '))+'</div>' : '';
+            var rate = x.rating ? '<span style="color:#e3b341;font-weight:700">★ '+esc(x.rating)+'</span>' : '';
+            var poster = x.poster ? '<img class="movie-poster" src="'+attr(x.poster)+'" alt="" loading="lazy">' : '';
+            return widget(x.kind==='tv'?'TV series':'Movie',
+              '<div class="movie-card">' + poster + '<div><div class="kp-title">'+esc(x.title)+' '+rate+'</div>' +
+              '<div class="iwidget-sub" style="margin-top:4px">'+meta+'</div>' + g +
+              '<div class="kp-extract" style="margin-top:8px">'+esc(x.overview)+'</div></div></div>');
+          }
+          function transitWidget(x){
+            var body = x.departures.map(function(d){
+              return '<div class="list-row"><span>' + (d.route?'<span class="mag" style="background:var(--accent)22;color:var(--accent)">'+esc(d.route)+'</span> ':'') + esc(d.dest||'') + '</span>' +
+                '<span style="white-space:nowrap;text-align:right"><b class="' + (d.delayed?'down':'up') + '">'+esc(d.when)+'</b><div class="iwidget-sub" style="margin:0">'+esc(d.time)+'</div></span></div>';
+            }).join('');
+            return widget('Departures — ' + esc(x.stop), body);
+          }
+          // ── Markets ──
+          function stockWidget(x){
+            var cls = x.up?'up':'down', sign = x.up?'+':'';
+            return widget('Stock &middot; ' + esc(x.symbol),
+              (x.name?'<div class="iwidget-sub" style="margin:0 0 6px">'+esc(x.name)+' &middot; '+esc(x.exchange)+'</div>':'') +
+              '<div class="iwidget-main">' + esc(x.price.toLocaleString()) + ' <span style="font-size:14px;color:var(--muted)">'+esc(x.currency)+'</span></div>' +
+              '<div class="'+cls+'" style="font-size:14px;font-weight:600;margin-top:4px">'+sign+esc(x.change)+' ('+sign+esc(x.pct)+'%)</div>');
+          }
+          function cryptoWidget(x){
+            var cls = x.up?'up':'down', sign = x.up?'+':'';
+            var aud = x.aud!=null ? '<div class="iwidget-sub">A$'+esc(x.aud.toLocaleString())+'</div>' : '';
+            return widget('Crypto &middot; ' + esc(x.name),
+              '<div class="iwidget-main">$' + esc(x.usd.toLocaleString()) + ' <span style="font-size:14px;color:var(--muted)">USD</span></div>' + aud +
+              '<div class="'+cls+'" style="font-size:14px;font-weight:600;margin-top:4px">'+sign+esc(x.pct)+'% (24h)</div>');
+          }
+          function sportWidget(x){
+            var body = x.games.map(function(g){
+              var score = (g.hs!=null && g.as!=null) ? '<b style="color:var(--title)">'+esc(g.hs)+' – '+esc(g.as)+'</b>' : '<span class="iwidget-sub" style="margin:0">'+esc(g.date)+(g.time?' '+esc(g.time):'')+'</span>';
+              return '<div class="list-row"><span>'+esc(g.home)+' v '+esc(g.away)+'</span><span style="white-space:nowrap">'+score+'</span></div>';
+            }).join('');
+            return widget((x.upcoming?'Fixtures — ':'Results — ') + esc(x.league), body);
+          }
           var instantP = window.__instantP || (window.__instantP = fetch('/api/instant?q=' + encodeURIComponent(q)).then(function (r) { return r.json(); }).catch(function () { return null; }));
           instantP
             .then(function (d) {
@@ -420,6 +551,21 @@ function resultsPage(q: string, data: any, page: number) {
               if (w.aviation) html += aviationWidget(w.aviation);
               if (w.weather)  html += weatherWidget(w.weather);
               if (w.time)     html += timeWidget(w.time);
+              if (w.dev)      html += devWidget(w.dev);
+              if (w.dns)      html += dnsWidget(w.dns);
+              if (w.whois)    html += whoisWidget(w.whois);
+              if (w.quake)    html += quakeWidget(w.quake);
+              if (w.iss)      html += issWidget(w.iss);
+              if (w.launch)   html += launchWidget(w.launch);
+              if (w.moon)     html += moonWidget(w.moon);
+              if (w.aurora)   html += auroraWidget(w.aurora);
+              if (w.sun)      html += sunWidget(w.sun);
+              if (w.surf)     html += surfWidget(w.surf);
+              if (w.movie)    html += movieWidget(w.movie);
+              if (w.transit)  html += transitWidget(w.transit);
+              if (w.stock)    html += stockWidget(w.stock);
+              if (w.crypto)   html += cryptoWidget(w.crypto);
+              if (w.sport)    html += sportWidget(w.sport);
               if (d.wiki)     html += kp(d.wiki);
               if (d.related && d.related.length) html += relatedBlock(d.related);
               el.innerHTML = html;
