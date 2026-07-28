@@ -2,9 +2,33 @@
 // and AI query-understanding. Everything here is best-effort and defensively
 // timed out: a search must NEVER hang or hard-fail because an enrichment did.
 
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
+
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY
 const ANSWER_MODEL = process.env.ANSWER_MODEL || 'claude-haiku-4-5'
 const UA = 'RadicalSearch/1.0 (+https://search.theradicalparty.com)'
+
+// Airport name → ICAO map (OurAirports: world large/medium + all Australian
+// aerodromes). Lets "bankstown airport metar" resolve to YSBK deterministically
+// without leaning on the model's spotty knowledge of obscure codes.
+const AIRPORTS = (() => {
+  try { return JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'airports.json'), 'utf8')) }
+  catch { return {} }
+})()
+function airNorm(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\b(airport|airfield|aerodrome|international|intl|regional|municipal|field|airbase|raaf|airpark|station)\b/g, ' ')
+    .replace(/\s+/g, ' ').trim()
+}
+function resolveAirport(q) {
+  const s = airNorm(String(q).replace(/\b(metar|taf|atis|notam|airport|aviation|icao|wx|weather|forecast|current|the|at|in|for)\b/gi, ' '))
+  if (!s) return null
+  if (AIRPORTS[s]) return AIRPORTS[s]
+  for (const w of s.split(' ')) if (w.length >= 4 && AIRPORTS[w]) return AIRPORTS[w]
+  return null
+}
 
 // Small helper: fetch JSON with a timeout, never throws (returns null on any error).
 async function getJson(url, { timeout = 4000, headers = {} } = {}) {
@@ -444,7 +468,9 @@ export async function instant(q) {
   // Aviation: code from the query, else the AI-resolved ICAO (airport names).
   // NOAA AWC first; for AU aerodromes it lacks (e.g. YSBK), fall back to NAIPS.
   let aviation = aviation0
-  const icao = avIntent?.icao || (avIntent?.needsResolve ? classify?.icao : null)
+  // Resolve airport NAMES via the local OurAirports map first (deterministic),
+  // then fall back to the AI-supplied ICAO.
+  const icao = avIntent?.icao || (avIntent?.needsResolve ? (resolveAirport(query) || classify?.icao) : null)
   if (avIntent && !aviation && icao) {
     if (!avIntent.icao) aviation = await parseAviation(icao)          // classify-resolved code → try AWC
     if (!aviation && /^Y[A-Z]{3}$/i.test(icao)) aviation = await naipsAviation(icao.toUpperCase()) // AU fallback
