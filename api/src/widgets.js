@@ -233,10 +233,13 @@ async function aurora(q) {
   const d = await J('https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json', { timeout: 5000 })
   if (!Array.isArray(d) || d.length < 2) return null
   const last = d[d.length - 1]
-  const kp = parseFloat(last[1]); if (isNaN(kp)) return null
+  // SWPC returns either an array-of-arrays (with a header row) or, currently, an
+  // array of objects {time_tag, Kp, ...} — handle both shapes.
+  const kp = parseFloat(Array.isArray(last) ? last[1] : (last?.Kp ?? last?.kp))
+  if (isNaN(kp)) return null
   const activity = kp >= 7 ? 'Severe storm' : kp >= 5 ? 'Geomagnetic storm' : kp >= 4 ? 'Active' : kp >= 3 ? 'Unsettled' : 'Quiet'
   const chance = kp >= 7 ? 'Aurora possible at mid-latitudes' : kp >= 5 ? 'Aurora likely at high latitudes' : kp >= 4 ? 'Aurora near the poles' : 'Aurora only at very high latitudes'
-  return { kp: +kp.toFixed(2), activity, chance, obs: last[0] }
+  return { kp: +kp.toFixed(2), activity, chance, obs: Array.isArray(last) ? last[0] : (last?.time_tag || '') }
 }
 
 async function sunTimes(q) {
@@ -310,7 +313,10 @@ async function transit(q) {
   if (!stopName) return null
   const H = { Authorization: `apikey ${TFNSW_KEY}` }
   const sf = await J(`https://api.transport.nsw.gov.au/v1/tp/stop_finder?outputFormat=rapidJSON&type_sf=any&name_sf=${encodeURIComponent(stopName)}&coordOutputFormat=EPSG:4326&TfNSWSF=true`, { headers: H, timeout: 5000 })
-  const loc = (sf?.locations || []).find(l => l.type === 'stop' || l.id)
+  // stop_finder returns suburbs, POIs and stops mixed; the actual station/stop is
+  // marked type:'stop' (and usually isBest). A bare suburb id yields no departures.
+  const locs = sf?.locations || []
+  const loc = locs.find(l => l.type === 'stop') || locs.find(l => l.isBest && l.type !== 'suburb') || null
   if (!loc?.id) return null
   const dm = await J(`https://api.transport.nsw.gov.au/v1/tp/departure_mon?outputFormat=rapidJSON&coordOutputFormat=EPSG:4326&mode=direct&type_dm=stop&name_dm=${encodeURIComponent(loc.id)}&departureMonitorMacro=true&TfNSWDM=true&version=10.2.1.42`, { headers: H, timeout: 6000 })
   const events = dm?.stopEvents
